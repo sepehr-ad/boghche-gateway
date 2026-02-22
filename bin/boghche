@@ -1,0 +1,39 @@
+#!/bin/bash
+
+CONFIG="/etc/boghche/config.json"
+
+case "$1" in
+  init)
+    sudo mkdir -p /etc/boghche
+
+    read -p "Enter Server Public IP: " PUB_IP
+    read -p "Enter Remote Peer IP: " FGT_IP
+    read -p "Enter WAN Interface (e.g. eth0): " WAN_IF
+    read -p "Enter Tunnel IP (e.g. 10.11.11.2/30): " VTI_ADDR
+
+    sudo bash -c "cat > $CONFIG" <<EOF
+{
+  "pub_ip": "$PUB_IP",
+  "fgt_ip": "$FGT_IP",
+  "wan_if": "$WAN_IF",
+  "vti_addr": "$VTI_ADDR"
+}
+EOF
+
+    echo "[✓] Configuration saved to $CONFIG"
+    ;;
+  start)
+    sudo bash /usr/local/lib/boghche/vti-engine.sh
+    ;;
+  status)
+    ip link show vti0
+    ;;
+  *)
+    echo "Boghche Gateway CLI"
+    echo ""
+    echo "Commands:"
+    echo "  boghche init"
+    echo "  boghche start"
+    echo "  boghche status"
+    ;;
+esac

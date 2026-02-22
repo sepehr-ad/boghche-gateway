@@ -7,13 +7,14 @@ echo "[+] Installing Baghcheh Gateway..."
 apt update
 apt install -y jq curl
 
-mkdir -p /usr/local/lib/baghcheh
-mkdir -p /etc/baghcheh
+REPO="https://raw.githubusercontent.com/sepehr-ad/boghche-gateway/main"
 
-curl -sL $REPO/lib/vti-engine.sh -o /usr/local/lib/baghcheh/vti-engine.sh
-curl -sL $REPO/bin/baghcheh -o /usr/local/bin/baghcheh
-curl -sL $REPO/systemd/baghcheh.service -o /etc/systemd/system/baghcheh.service
+mkdir -p /usr/local/lib/boghche
+mkdir -p /etc/boghche
 
+curl -sL $REPO/lib/vti-engine.sh -o /usr/local/lib/boghche/vti-engine.sh
+curl -sL $REPO/bin/boghche -o /usr/local/bin/boghche
+curl -sL $REPO/systemd/boghche.service -o /etc/systemd/system/boghche.service
 chmod +x /usr/local/lib/baghcheh/vti-engine.sh
 chmod +x /usr/local/bin/baghcheh
 
