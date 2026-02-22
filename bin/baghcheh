@@ -1,0 +1,22 @@
+#!/bin/bash
+
+case "$1" in
+  init)
+    sudo mkdir -p /etc/baghcheh
+    sudo nano /etc/baghcheh/config.json
+    ;;
+  start)
+    sudo bash /usr/local/lib/baghcheh/vti-engine.sh
+    ;;
+  status)
+    ip link show vti0
+    ;;
+  *)
+    echo "Baghcheh Gateway CLI"
+    echo ""
+    echo "Commands:"
+    echo "  baghcheh init"
+    echo "  baghcheh start"
+    echo "  baghcheh status"
+    ;;
+esac

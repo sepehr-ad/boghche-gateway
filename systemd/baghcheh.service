@@ -1,0 +1,11 @@
+[Unit]
+Description=Baghcheh Secure Gateway Service
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/baghcheh/vti-engine.sh
+RemainAfterExit=true
+
+[Install]
+WantedBy=multi-user.target
