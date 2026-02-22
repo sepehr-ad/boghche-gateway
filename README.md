@@ -1,4 +1,4 @@
-# 🪴 Baghcheh Gateway
+# 🪴 Boghche Gateway
 
 Production-ready VTI-based IPsec Gateway for Ubuntu Linux.
 
@@ -12,7 +12,7 @@ Production-ready VTI-based IPsec Gateway for Ubuntu Linux.
 ## Installation
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YOURUSERNAME/baghcheh-gateway/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/sepehr-ad/boghche-gateway/main/install.sh | sudo bash
 ---
 
 ## Author

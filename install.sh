@@ -1,6 +1,6 @@
 #!/bin/bash
 
-REPO="https://raw.githubusercontent.co/sepehr-ad/baghcheh-gateway/main"
+REPO="https://raw.githubusercontent.co/sepehr-ad/boghche-gateway/main"
 
 echo "[+] Installing Baghcheh Gateway..."
 
