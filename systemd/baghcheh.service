@@ -1,10 +1,10 @@
 [Unit]
-Description=Baghcheh Secure Gateway Service
+Description=Boghche Secure Gateway Service
 After=network.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/lib/baghcheh/vti-engine.sh
+ExecStart=/usr/local/lib/boghche/engine.sh
 RemainAfterExit=true
 
 [Install]

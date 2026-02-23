@@ -2,16 +2,25 @@
 
 CONFIG="/etc/boghche/config.json"
 
-case "$1" in
-  init)
-    sudo mkdir -p /etc/boghche
+title() {
+  gum style \
+    --foreground 212 \
+    --border-foreground 212 \
+    --border double \
+    --align center \
+    --width 50 \
+    "🌿 Boghche Gateway"
+}
 
-    read -p "Enter Server Public IP: " PUB_IP
-    read -p "Enter Remote Peer IP: " FGT_IP
-    read -p "Enter WAN Interface (e.g. eth0): " WAN_IF
-    read -p "Enter Tunnel IP (e.g. 10.11.11.2/30): " VTI_ADDR
+configure() {
+  PUB_IP=$(gum input --placeholder "Server Public IP")
+  FGT_IP=$(gum input --placeholder "Remote Peer IP")
+  WAN_IF=$(gum input --value "eth0" --placeholder "WAN Interface")
+  VTI_ADDR=$(gum input --placeholder "Tunnel IP (10.11.11.2/30)")
 
-    sudo bash -c "cat > $CONFIG" <<EOF
+  mkdir -p /etc/boghche
+
+  cat > $CONFIG <<EOF
 {
   "pub_ip": "$PUB_IP",
   "fgt_ip": "$FGT_IP",
@@ -20,20 +29,48 @@ case "$1" in
 }
 EOF
 
-    echo "[✓] Configuration saved to $CONFIG"
-    ;;
-  start)
-    sudo bash /usr/local/lib/boghche/vti-engine.sh
-    ;;
-  status)
-    ip link show vti0
-    ;;
-  *)
-    echo "Boghche Gateway CLI"
-    echo ""
-    echo "Commands:"
-    echo "  boghche init"
-    echo "  boghche start"
-    echo "  boghche status"
-    ;;
-esac
+  gum style --foreground 10 "✔ Configuration Saved"
+}
+
+while true; do
+  clear
+  title
+
+  CHOICE=$(gum choose \
+    "Configure Tunnel" \
+    "Start Tunnel" \
+    "Stop Tunnel" \
+    "Service Status" \
+    "View Config" \
+    "Exit")
+
+  case "$CHOICE" in
+    "Configure Tunnel")
+      configure
+      ;;
+    "Start Tunnel")
+      systemctl restart boghche
+      gum style --foreground 10 "✔ Tunnel Started"
+      ;;
+    "Stop Tunnel")
+      systemctl stop boghche
+      gum style --foreground 1 "✖ Tunnel Stopped"
+      ;;
+    "Service Status")
+      STATUS=$(systemctl is-active boghche)
+      gum style --foreground 14 "Status: $STATUS"
+      ;;
+    "View Config")
+      if [ -f "$CONFIG" ]; then
+        cat $CONFIG | gum format
+      else
+        gum style --foreground 1 "No config found."
+      fi
+      ;;
+    "Exit")
+      exit
+      ;;
+  esac
+
+  gum confirm "Return to menu?" || exit
+done
