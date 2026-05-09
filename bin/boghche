@@ -159,6 +159,31 @@ add_tunnel_route() {
   gum style --foreground 10 "✔ Route ${ROUTE} added via ${VTI_IF}"
 }
 
+add_ufw_rule() {
+  need_root
+
+  if ! command -v ufw >/dev/null 2>&1; then
+    apt update >/dev/null 2>&1
+    apt install -y ufw >/dev/null 2>&1
+  fi
+
+  gum style --foreground 14 "Add UFW Access Rule"
+  gum style --foreground 8 "Allow specific source subnet/IP to access specific port"
+
+  SRC=$(gum input --placeholder "Source subnet or IP (example: 172.16.0.0/16)")
+  PORT=$(gum input --placeholder "Destination port (example: 22)")
+  PROTO=$(gum choose "tcp" "udp")
+
+  if [ -z "$SRC" ] || [ -z "$PORT" ]; then
+    gum style --foreground 1 "Source and port are required"
+    return
+  fi
+
+  ufw allow from "$SRC" to any port "$PORT" proto "$PROTO"
+
+  gum style --foreground 10 "✔ UFW rule added"
+}
+
 generate_ipsec() {
   need_root
   if [ ! -f "$CONFIG" ]; then
@@ -194,6 +219,7 @@ while true; do
     "Generate IPsec Config" \
     "Start Tunnel" \
     "Add Tunnel Route" \
+    "Add UFW Rule" \
     "Stop Tunnel" \
     "Service Status" \
     "View Config" \
@@ -204,6 +230,7 @@ while true; do
     "Generate IPsec Config") generate_ipsec ;;
     "Start Tunnel") start_tunnel ;;
     "Add Tunnel Route") add_tunnel_route ;;
+    "Add UFW Rule") add_ufw_rule ;;
     "Stop Tunnel") stop_tunnel ;;
     "Service Status")
       systemctl status boghche --no-pager || true
