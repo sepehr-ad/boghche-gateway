@@ -1,0 +1,13 @@
+[Unit]
+Description=Boghche Gateway Engine
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/lib/boghche/engine.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
