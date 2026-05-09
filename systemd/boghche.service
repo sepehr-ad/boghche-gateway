@@ -1,13 +1,12 @@
 [Unit]
 Description=Boghche Gateway Engine
-After=network-online.target
+After=network-online.target strongswan-starter.service
 Wants=network-online.target
 
 [Service]
-Type=simple
+Type=oneshot
 ExecStart=/usr/local/lib/boghche/engine.sh
-Restart=always
-RestartSec=5
+RemainAfterExit=yes
 
 [Install]
 WantedBy=multi-user.target
