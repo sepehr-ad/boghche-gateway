@@ -57,6 +57,7 @@ install_packages() {
 
 install_gum() {
   if command -v gum >/dev/null 2>&1; then
+    echo "[✓] gum already installed"
     return
   fi
 
@@ -65,17 +66,35 @@ install_gum() {
   TMP_DIR=$(mktemp -d)
   VERSION="0.14.0"
 
-  curl -fsSL \
-    "https://github.com/charmbracelet/gum/releases/download/v${VERSION}/gum_${VERSION}_Linux_${GUM_ARCH}.tar.gz" \
-    -o ${TMP_DIR}/gum.tar.gz
+  case "$GUM_ARCH" in
+    x86_64)
+      GUM_FILE="gum_${VERSION}_Linux_x86_64.tar.gz"
+      ;;
+    arm64)
+      GUM_FILE="gum_${VERSION}_Linux_arm64.tar.gz"
+      ;;
+  esac
+
+  URL="https://github.com/charmbracelet/gum/releases/download/v${VERSION}/${GUM_FILE}"
+
+  echo "[+] Downloading ${GUM_FILE}"
+
+  curl -fL "$URL" -o ${TMP_DIR}/gum.tar.gz
 
   tar -xzf ${TMP_DIR}/gum.tar.gz -C ${TMP_DIR}
 
-  install \
-    ${TMP_DIR}/gum_${VERSION}_Linux_${GUM_ARCH}/gum \
-    /usr/local/bin/gum
+  GUM_BIN=$(find ${TMP_DIR} -type f -name gum | head -n 1)
+
+  if [ -z "$GUM_BIN" ]; then
+    echo "gum binary not found"
+    exit 1
+  fi
+
+  install "$GUM_BIN" /usr/local/bin/gum
 
   rm -rf ${TMP_DIR}
+
+  echo "[✓] gum installed"
 }
 
 install_files() {
@@ -89,15 +108,17 @@ install_files() {
   curl -fsSL "$REPO/lib/ipsec.sh" -o /usr/local/lib/boghche/ipsec.sh || true
   curl -fsSL "$REPO/lib/vtiup.sh" -o /usr/local/lib/boghche/vtiup.sh || true
   curl -fsSL "$REPO/bin/boghche" -o /usr/local/bin/boghche
-  curl -fsSL "$REPO/systemd/boghche.service" -o /etc/systemd/system/boghche.service
+  curl -fsSL "$REPO/systemd/boghche.service" -o /etc/systemd/system/boghche.service || true
 
   chmod +x /usr/local/lib/boghche/*.sh || true
   chmod +x /usr/local/bin/boghche
 }
 
 configure_systemd() {
-  systemctl daemon-reload
-  systemctl enable boghche.service
+  if [ -f /etc/systemd/system/boghche.service ]; then
+    systemctl daemon-reload
+    systemctl enable boghche.service || true
+  fi
 }
 
 validate_install() {
