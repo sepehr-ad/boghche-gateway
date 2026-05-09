@@ -70,9 +70,7 @@ cat >> "$IPSEC_CONF" <<EOF
     leftsubnet=0.0.0.0/0
     rightsubnet=0.0.0.0/0
 
-    mark_in=${VTI_MARK}/0xffffffff
-    mark_out=${VTI_MARK}/0xffffffff
-    mark_in_sa=yes
+    mark=${VTI_MARK}
 
     installpolicy=no
 EOF
