@@ -10,26 +10,31 @@ if [ ! -f "$CONFIG" ]; then
   exit 1
 fi
 
-MODE=$(jq -r .mode "$CONFIG")
-CONN_NAME=$(jq -r .conn_name "$CONFIG")
-LEFT=$(jq -r .left "$CONFIG")
-LEFTID=$(jq -r .leftid "$CONFIG")
-RIGHT=$(jq -r .right "$CONFIG")
-RIGHTID=$(jq -r .rightid "$CONFIG")
-PSK=$(jq -r .psk "$CONFIG")
-IKE=$(jq -r .ike "$CONFIG")
-ESP=$(jq -r .esp "$CONFIG")
-DPD_DELAY=$(jq -r .dpd_delay "$CONFIG")
-DPD_TIMEOUT=$(jq -r .dpd_timeout "$CONFIG")
-REKEY=$(jq -r .rekey "$CONFIG")
-VTI_MARK=$(jq -r .vti_mark "$CONFIG")
-LOCAL_SUBNET=$(jq -r .local_subnet "$CONFIG")
-REMOTE_SUBNET=$(jq -r .remote_subnet "$CONFIG")
+MODE=$(jq -r '.mode // empty' "$CONFIG")
+CONN_NAME=$(jq -r '.conn_name // "fgt"' "$CONFIG")
+LEFT=$(jq -r '.left // empty' "$CONFIG")
+LEFTID=$(jq -r '.leftid // .left // empty' "$CONFIG")
+RIGHT=$(jq -r '.right // empty' "$CONFIG")
+RIGHTID=$(jq -r '.rightid // .right // empty' "$CONFIG")
+PSK=$(jq -r '.psk // empty' "$CONFIG")
+IKE=$(jq -r '.ike // "aes256-sha256-modp2048!"' "$CONFIG")
+ESP=$(jq -r '.esp // "aes256-sha256!"' "$CONFIG")
+DPD_DELAY=$(jq -r '.dpd_delay // "10s"' "$CONFIG")
+DPD_TIMEOUT=$(jq -r '.dpd_timeout // "30s"' "$CONFIG")
+REKEY=$(jq -r '.rekey // false' "$CONFIG")
+VTI_MARK=$(jq -r '.vti_mark // "42"' "$CONFIG")
+LOCAL_SUBNET=$(jq -r '.local_subnet // empty' "$CONFIG")
+REMOTE_SUBNET=$(jq -r '.remote_subnet // empty' "$CONFIG")
 
 if [ "$REKEY" = "true" ]; then
   REKEY_VALUE="yes"
 else
   REKEY_VALUE="no"
+fi
+
+if [ -z "$LEFT" ] || [ -z "$RIGHT" ] || [ -z "$LEFTID" ] || [ -z "$RIGHTID" ] || [ -z "$PSK" ]; then
+  echo "Missing required IPsec values in $CONFIG"
+  exit 1
 fi
 
 cat > "$IPSEC_CONF" <<EOF
@@ -65,8 +70,9 @@ cat >> "$IPSEC_CONF" <<EOF
     leftsubnet=0.0.0.0/0
     rightsubnet=0.0.0.0/0
 
-    mark_in=${VTI_MARK}
-    mark_out=${VTI_MARK}
+    mark_in=${VTI_MARK}/0xffffffff
+    mark_out=${VTI_MARK}/0xffffffff
+    mark_in_sa=yes
 
     installpolicy=no
 EOF
