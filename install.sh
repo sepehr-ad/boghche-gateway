@@ -47,6 +47,8 @@ install_packages() {
     jq \
     iproute2 \
     iptables \
+    ufw \
+    unbound \
     strongswan \
     strongswan-pki \
     libcharon-extra-plugins \
@@ -101,6 +103,7 @@ install_files() {
   mkdir -p \
     /usr/local/lib/boghche \
     /etc/boghche \
+    /etc/unbound/unbound.conf.d \
     /var/log/boghche
 
   curl -fsSL "$REPO/lib/engine.sh" -o /usr/local/lib/boghche/engine.sh
@@ -126,6 +129,7 @@ validate_install() {
   command -v jq >/dev/null
   command -v ip >/dev/null
   command -v ipsec >/dev/null
+  command -v unbound >/dev/null
 
   echo "[✓] Validation successful"
 }
