@@ -57,6 +57,8 @@ conn ${CONN_NAME}
     ike=${IKE}
     esp=${ESP}
 
+    mark=${VTI_MARK}
+
     dpddelay=${DPD_DELAY}
     dpdtimeout=${DPD_TIMEOUT}
     dpdaction=restart
@@ -70,9 +72,6 @@ cat >> "$IPSEC_CONF" <<EOF
 
     leftsubnet=0.0.0.0/0
     rightsubnet=0.0.0.0/0
-
-    if_id_in=${VTI_MARK}
-    if_id_out=${VTI_MARK}
 EOF
 else
 cat >> "$IPSEC_CONF" <<EOF
