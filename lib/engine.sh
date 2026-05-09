@@ -49,20 +49,21 @@ if [ "$MODE" = "route" ]; then
   sysctl -w net.ipv4.conf."$VTI_IF".rp_filter=0 >/dev/null
   sysctl -w net.ipv4.conf."$VTI_IF".disable_policy=1 >/dev/null
 
+  ip route flush table vti 2>/dev/null || true
+
+  while ip rule show | grep -q "lookup vti"; do
+    PRIO=$(ip rule show | awk '/lookup vti/ {print $1; exit}' | tr -d ':')
+    [ -n "$PRIO" ] && ip rule del priority "$PRIO" 2>/dev/null || break
+  done
+
+  VTI_IP="${VTI_ADDR%%/*}"
+  ip rule add from "$VTI_IP/32" table vti 2>/dev/null || true
+
   if [ -n "$ROUTE_SUBNET" ] && [ "$ROUTE_SUBNET" != "null" ] && [ "$ROUTE_SUBNET" != "0.0.0.0/0" ]; then
     ip route replace "$ROUTE_SUBNET" dev "$VTI_IF"
-  fi
-
-  ip route replace default dev "$VTI_IF" table vti
-
-  while ip rule del from "$ROUTE_SUBNET" table vti 2>/dev/null; do true; done
-  while ip rule del from "${VTI_ADDR%%/*}" table vti 2>/dev/null; do true; done
-  while ip rule del iif "$WAN_IF" table vti 2>/dev/null; do true; done
-
-  if [ -n "$ROUTE_SUBNET" ] && [ "$ROUTE_SUBNET" != "null" ] && [ "$ROUTE_SUBNET" != "0.0.0.0/0" ]; then
+    ip route replace "$ROUTE_SUBNET" dev "$VTI_IF" table vti
     ip rule add from "$ROUTE_SUBNET" table vti 2>/dev/null || true
   fi
-  ip rule add from "${VTI_ADDR%%/*}" table vti 2>/dev/null || true
 
   ip route flush cache
 
