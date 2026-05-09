@@ -71,8 +71,8 @@ cat >> "$IPSEC_CONF" <<EOF
     rightsubnet=0.0.0.0/0
 
     mark=${VTI_MARK}
-
     installpolicy=no
+    leftupdown=/usr/local/lib/boghche/vtiup.sh
 EOF
 else
 cat >> "$IPSEC_CONF" <<EOF
