@@ -26,6 +26,12 @@ VTI_MARK=$(jq -r .vti_mark "$CONFIG")
 LOCAL_SUBNET=$(jq -r .local_subnet "$CONFIG")
 REMOTE_SUBNET=$(jq -r .remote_subnet "$CONFIG")
 
+if [ "$REKEY" = "true" ]; then
+  REKEY_VALUE="yes"
+else
+  REKEY_VALUE="no"
+fi
+
 cat > "$IPSEC_CONF" <<EOF
 config setup
     charondebug="ike 2, knl 2, cfg 2"
@@ -50,7 +56,7 @@ conn ${CONN_NAME}
     dpdtimeout=${DPD_TIMEOUT}
     dpdaction=restart
 
-    rekey=${REKEY}
+    rekey=${REKEY_VALUE}
 EOF
 
 if [ "$MODE" = "route" ]; then
@@ -62,7 +68,6 @@ cat >> "$IPSEC_CONF" <<EOF
     mark=${VTI_MARK}
 
     installpolicy=no
-    install_routes=no
 EOF
 else
 cat >> "$IPSEC_CONF" <<EOF
