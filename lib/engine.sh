@@ -24,6 +24,11 @@ NAT_SOURCE=$(jq -r '.nat_source // empty' "$CONFIG")
 
 sysctl -w net.ipv4.ip_forward=1 >/dev/null
 
+# Disable rp_filter for route-based VPN / VTI traffic
+sysctl -w net.ipv4.conf.all.rp_filter=0 >/dev/null
+sysctl -w net.ipv4.conf.default.rp_filter=0 >/dev/null
+sysctl -w net.ipv4.conf.${WAN_IF}.rp_filter=0 >/dev/null 2>&1 || true
+
 if [ "$MODE" = "route" ]; then
   if [ -z "$LEFT" ] || [ -z "$RIGHT" ] || [ -z "$VTI_ADDR" ]; then
     echo "Route mode requires left, right and vti_addr"
@@ -47,8 +52,14 @@ if [ "$MODE" = "route" ]; then
   fi
 
   if [ "$NAT" = "true" ] && [ -n "$NAT_SOURCE" ] && [ "$NAT_SOURCE" != "null" ]; then
-    iptables -t nat -C POSTROUTING -s "$NAT_SOURCE" -o "$VTI_IF" -j MASQUERADE 2>/dev/null || \
-      iptables -t nat -A POSTROUTING -s "$NAT_SOURCE" -o "$VTI_IF" -j MASQUERADE
+    iptables -t nat -C POSTROUTING -s "$NAT_SOURCE" -o "$WAN_IF" -j MASQUERADE 2>/dev/null || \
+      iptables -t nat -A POSTROUTING -s "$NAT_SOURCE" -o "$WAN_IF" -j MASQUERADE
+
+    iptables -C FORWARD -i "$VTI_IF" -o "$WAN_IF" -j ACCEPT 2>/dev/null || \
+      iptables -A FORWARD -i "$VTI_IF" -o "$WAN_IF" -j ACCEPT
+
+    iptables -C FORWARD -i "$WAN_IF" -o "$VTI_IF" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || \
+      iptables -A FORWARD -i "$WAN_IF" -o "$VTI_IF" -m state --state RELATED,ESTABLISHED -j ACCEPT
   fi
 fi
 
