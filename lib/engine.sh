@@ -29,6 +29,11 @@ sysctl -w net.ipv4.conf.all.rp_filter=0 >/dev/null
 sysctl -w net.ipv4.conf.default.rp_filter=0 >/dev/null
 sysctl -w net.ipv4.conf.${WAN_IF}.rp_filter=0 >/dev/null 2>&1 || true
 
+# Ensure VTI policy routing table exists
+if ! grep -qE '^200[[:space:]]+vti' /etc/iproute2/rt_tables; then
+  echo '200 vti' >> /etc/iproute2/rt_tables
+fi
+
 if [ "$MODE" = "route" ]; then
   if [ -z "$LEFT" ] || [ -z "$RIGHT" ] || [ -z "$VTI_ADDR" ]; then
     echo "Route mode requires left, right and vti_addr"
@@ -47,9 +52,25 @@ if [ "$MODE" = "route" ]; then
   sysctl -w net.ipv4.conf."$VTI_IF".rp_filter=0 >/dev/null
   sysctl -w net.ipv4.conf."$VTI_IF".disable_policy=1 >/dev/null
 
+  # Main routing
   if [ -n "$ROUTE_SUBNET" ] && [ "$ROUTE_SUBNET" != "null" ] && [ "$ROUTE_SUBNET" != "0.0.0.0/0" ]; then
     ip route replace "$ROUTE_SUBNET" dev "$VTI_IF"
   fi
+
+  # Policy routing table
+  ip route replace default dev "$VTI_IF" table vti
+
+  # Cleanup duplicate rules
+  while ip rule del from "$ROUTE_SUBNET" table vti 2>/dev/null; do true; done
+  while ip rule del from "${VTI_ADDR%%/*}" table vti 2>/dev/null; do true; done
+  while ip rule del iif "$WAN_IF" table vti 2>/dev/null; do true; done
+
+  # Policy routing rules
+  ip rule add from "$ROUTE_SUBNET" table vti 2>/dev/null || true
+  ip rule add from "${VTI_ADDR%%/*}" table vti 2>/dev/null || true
+  ip rule add iif "$WAN_IF" table vti 2>/dev/null || true
+
+  ip route flush cache
 
   if [ "$NAT" = "true" ] && [ -n "$NAT_SOURCE" ] && [ "$NAT_SOURCE" != "null" ]; then
     iptables -t nat -C POSTROUTING -s "$NAT_SOURCE" -o "$WAN_IF" -j MASQUERADE 2>/dev/null || \
