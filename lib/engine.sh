@@ -14,10 +14,10 @@ MODE=$(jq -r '.mode // "route"' "$CONFIG")
 LEFT=$(jq -r '.left // .pub_ip // empty' "$CONFIG")
 RIGHT=$(jq -r '.right // .fgt_ip // empty' "$CONFIG")
 WAN_IF=$(jq -r '.wan_if // "eth0"' "$CONFIG")
-VTI_IF=$(jq -r '.vti_if // "ipsec0"' "$CONFIG")
+VTI_IF=$(jq -r '.vti_if // "vti0"' "$CONFIG")
 VTI_ADDR=$(jq -r '.vti_addr // empty' "$CONFIG")
 VTI_MARK=$(jq -r '.vti_mark // "42"' "$CONFIG")
-MTU=$(jq -r '.mtu // ""' "$CONFIG")
+MTU=$(jq -r '.mtu // "1436"' "$CONFIG")
 ROUTE_SUBNET=$(jq -r '.route_subnet // empty' "$CONFIG")
 NAT=$(jq -r '.nat // false' "$CONFIG")
 NAT_SOURCE=$(jq -r '.nat_source // empty' "$CONFIG")
@@ -39,15 +39,17 @@ if [ "$MODE" = "route" ]; then
 
   ip link del "$VTI_IF" 2>/dev/null || true
 
-  ip link add "$VTI_IF" type xfrm if_id "$VTI_MARK"
+  ip link add "$VTI_IF" type vti local "$LEFT" remote "$RIGHT" key "$VTI_MARK"
+
   ip addr add "$VTI_ADDR" dev "$VTI_IF" 2>/dev/null || true
+
   ip link set "$VTI_IF" up
 
-  if [ -n "$MTU" ] && [ "$MTU" != "null" ]; then
-    ip link set "$VTI_IF" mtu "$MTU"
-  fi
+  ip link set "$VTI_IF" mtu "$MTU"
 
-  sysctl -w net.ipv4.conf."$VTI_IF".rp_filter=0 >/dev/null 2>&1 || true
+  sysctl -w net.ipv4.conf.${VTI_IF}.rp_filter=0 >/dev/null 2>&1 || true
+  sysctl -w net.ipv4.conf.${VTI_IF}.disable_policy=1 >/dev/null 2>&1 || true
+  sysctl -w net.ipv4.conf.${VTI_IF}.disable_xfrm=1 >/dev/null 2>&1 || true
 
   ip route flush table vti 2>/dev/null || true
 
@@ -57,6 +59,7 @@ if [ "$MODE" = "route" ]; then
   done
 
   VTI_IP="${VTI_ADDR%%/*}"
+
   ip rule add from "$VTI_IP/32" table vti 2>/dev/null || true
 
   if [ -n "$ROUTE_SUBNET" ] && [ "$ROUTE_SUBNET" != "null" ] && [ "$ROUTE_SUBNET" != "0.0.0.0/0" ]; then
@@ -64,6 +67,8 @@ if [ "$MODE" = "route" ]; then
     ip route replace "$ROUTE_SUBNET" dev "$VTI_IF" table vti
     ip rule add from "$ROUTE_SUBNET" table vti 2>/dev/null || true
   fi
+
+  ip rule add iif "$WAN_IF" table vti 2>/dev/null || true
 
   ip route flush cache
 
