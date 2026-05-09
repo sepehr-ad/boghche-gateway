@@ -58,9 +58,9 @@ configure() {
 
   gum style --foreground 14 "Common IPsec settings"
   CONN_NAME=$(ask "Connection name" "fgt")
-  LEFT_ID=$(ask "Local public IP / leftid" "")
+  LEFT_ID=$(ask "Local public IP / leftid")
   LEFT_IP=$(ask "Local public IP / left" "$LEFT_ID")
-  RIGHT_IP=$(ask "Remote peer public IP / right" "")
+  RIGHT_IP=$(ask "Remote peer public IP / right")
   RIGHT_ID=$(ask "Remote peer ID / rightid" "$RIGHT_IP")
   PSK=$(ask_password "Pre-shared key / PSK")
   IKE=$(ask "IKE proposal" "aes256-sha256-modp2048!")
@@ -84,20 +84,26 @@ configure() {
 
   if [ "$MODE" = "route" ]; then
     gum style --foreground 14 "Route-based / VTI settings"
+    gum style --foreground 8 "Example VTI IP: 10.11.11.2/30"
+
     VTI_IF=$(ask "VTI interface name" "vti0")
     VTI_ADDR=$(ask "VTI local address with CIDR" "10.11.11.2/30")
     VTI_REMOTE=$(ask "VTI remote gateway address" "10.11.11.1")
     VTI_MARK=$(ask "VTI mark/key" "42")
-    ROUTE_SUBNET=$(ask "Remote routed subnet to route over VTI" "0.0.0.0/0")
-    NAT_SOURCE=$(ask "iptables source subnet for tunnel/NAT" "")
+
+    gum style --foreground 8 "Remote network routed over tunnel"
+    ROUTE_SUBNET=$(ask "Primary routed subnet via tunnel" "172.16.0.0/16")
+
+    NAT_SOURCE=$(ask "Optional NAT source subnet" "")
     MTU=$(ask "VTI MTU" "1436")
   else
     gum style --foreground 14 "Policy-based settings"
-    LOCAL_SUBNET=$(ask "Local protected subnet / leftsubnet" "")
-    REMOTE_SUBNET=$(ask "Remote protected subnet / rightsubnet" "")
+    LOCAL_SUBNET=$(ask "Local protected subnet / leftsubnet")
+    REMOTE_SUBNET=$(ask "Remote protected subnet / rightsubnet")
   fi
 
   mkdir -p /etc/boghche
+
   jq -n \
     --arg mode "$MODE" \
     --arg conn_name "$CONN_NAME" \
@@ -122,11 +128,35 @@ configure() {
     --arg mtu "$MTU" \
     --arg local_subnet "$LOCAL_SUBNET" \
     --arg remote_subnet "$REMOTE_SUBNET" \
-    '{mode:$mode,conn_name:$conn_name,left:$left,leftid:$leftid,right:$right,rightid:$rightid,psk:$psk,ike:$ike,esp:$esp,dpd_delay:$dpd_delay,dpd_timeout:$dpd_timeout,rekey:($rekey=="true"),wan_if:$wan_if,nat:($nat=="true"),vti_if:$vti_if,vti_addr:$vti_addr,vti_remote:$vti_remote,vti_mark:$vti_mark,route_subnet:$route_subnet,nat_source:$nat_source,mtu:$mtu,local_subnet:$local_subnet,remote_subnet:$remote_subnet}' \
-    > "$CONFIG"
+    '{mode:$mode,conn_name:$conn_name,left:$left,leftid:$leftid,right:$right,rightid:$rightid,psk:$psk,ike:$ike,esp:$esp,dpd_delay:$dpd_delay,dpd_timeout:$dpd_timeout,rekey:($rekey=="true"),wan_if:$wan_if,nat:($nat=="true"),vti_if:$vti_if,vti_addr:$vti_addr,vti_remote:$vti_remote,vti_mark:$vti_mark,route_subnet:$route_subnet,nat_source:$nat_source,mtu:$mtu,local_subnet:$local_subnet,remote_subnet:$remote_subnet}' > "$CONFIG"
 
   chmod 600 "$CONFIG"
   gum style --foreground 10 "✔ Configuration saved to $CONFIG"
+}
+
+add_tunnel_route() {
+  need_root
+
+  if [ ! -f "$CONFIG" ]; then
+    gum style --foreground 1 "No tunnel config found"
+    return
+  fi
+
+  VTI_IF=$(jq -r '.vti_if // "vti0"' "$CONFIG")
+
+  gum style --foreground 14 "Add Tunnel Route"
+  gum style --foreground 8 "Example: 172.16.0.0/16 or 10.20.30.0/24"
+
+  ROUTE=$(gum input --placeholder "Subnet to route through ${VTI_IF}")
+
+  if [ -z "$ROUTE" ]; then
+    gum style --foreground 1 "Route cannot be empty"
+    return
+  fi
+
+  ip route replace "$ROUTE" dev "$VTI_IF"
+
+  gum style --foreground 10 "✔ Route ${ROUTE} added via ${VTI_IF}"
 }
 
 generate_ipsec() {
@@ -135,6 +165,7 @@ generate_ipsec() {
     gum style --foreground 1 "No config found. Run Configure Tunnel first."
     return
   fi
+
   /usr/local/lib/boghche/ipsec.sh
   gum style --foreground 10 "✔ /etc/ipsec.conf and /etc/ipsec.secrets generated"
 }
@@ -142,7 +173,7 @@ generate_ipsec() {
 start_tunnel() {
   need_root
   generate_ipsec
-  systemctl restart boghche
+  systemctl restart boghche || true
   ipsec restart || true
   gum style --foreground 10 "✔ Tunnel start requested"
 }
@@ -162,6 +193,7 @@ while true; do
     "Configure Tunnel" \
     "Generate IPsec Config" \
     "Start Tunnel" \
+    "Add Tunnel Route" \
     "Stop Tunnel" \
     "Service Status" \
     "View Config" \
@@ -171,6 +203,7 @@ while true; do
     "Configure Tunnel") configure ;;
     "Generate IPsec Config") generate_ipsec ;;
     "Start Tunnel") start_tunnel ;;
+    "Add Tunnel Route") add_tunnel_route ;;
     "Stop Tunnel") stop_tunnel ;;
     "Service Status")
       systemctl status boghche --no-pager || true
