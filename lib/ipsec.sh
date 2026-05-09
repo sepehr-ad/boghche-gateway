@@ -50,9 +50,44 @@ conn ${CONN_NAME}
 
     left=${LEFT}
     leftid=${LEFTID}
+    leftsubnet=0.0.0.0/0
 
     right=${RIGHT}
     rightid=${RIGHTID}
+    rightsubnet=0.0.0.0/0
+
+    ike=${IKE}
+    esp=${ESP}
+
+    mark=${VTI_MARK}
+
+    dpddelay=${DPD_DELAY}
+    dpdtimeout=${DPD_TIMEOUT}
+    dpdaction=restart
+
+    rekey=${REKEY_VALUE}
+    reauth=no
+EOF
+
+if [ "$MODE" != "route" ]; then
+cat > "$IPSEC_CONF" <<EOF
+config setup
+    charondebug="ike 2, knl 2, cfg 2"
+    uniqueids=yes
+
+conn ${CONN_NAME}
+    auto=start
+    type=tunnel
+    keyexchange=ikev2
+    authby=secret
+
+    left=${LEFT}
+    leftid=${LEFTID}
+    leftsubnet=${LOCAL_SUBNET}
+
+    right=${RIGHT}
+    rightid=${RIGHTID}
+    rightsubnet=${REMOTE_SUBNET}
 
     ike=${IKE}
     esp=${ESP}
@@ -62,23 +97,7 @@ conn ${CONN_NAME}
     dpdaction=restart
 
     rekey=${REKEY_VALUE}
-EOF
-
-if [ "$MODE" = "route" ]; then
-cat >> "$IPSEC_CONF" <<EOF
-
-    leftsubnet=0.0.0.0/0
-    rightsubnet=0.0.0.0/0
-
-    mark=${VTI_MARK}
-    installpolicy=no
-    leftupdown=/usr/local/lib/boghche/vtiup.sh
-EOF
-else
-cat >> "$IPSEC_CONF" <<EOF
-
-    leftsubnet=${LOCAL_SUBNET}
-    rightsubnet=${REMOTE_SUBNET}
+    reauth=no
 EOF
 fi
 
