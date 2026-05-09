@@ -50,16 +50,12 @@ conn ${CONN_NAME}
 
     left=${LEFT}
     leftid=${LEFTID}
-    leftsubnet=0.0.0.0/0
 
     right=${RIGHT}
     rightid=${RIGHTID}
-    rightsubnet=0.0.0.0/0
 
     ike=${IKE}
     esp=${ESP}
-
-    mark=${VTI_MARK}
 
     dpddelay=${DPD_DELAY}
     dpdtimeout=${DPD_TIMEOUT}
@@ -69,35 +65,20 @@ conn ${CONN_NAME}
     reauth=no
 EOF
 
-if [ "$MODE" != "route" ]; then
-cat > "$IPSEC_CONF" <<EOF
-config setup
-    charondebug="ike 2, knl 2, cfg 2"
-    uniqueids=yes
+if [ "$MODE" = "route" ]; then
+cat >> "$IPSEC_CONF" <<EOF
 
-conn ${CONN_NAME}
-    auto=start
-    type=tunnel
-    keyexchange=ikev2
-    authby=secret
+    leftsubnet=0.0.0.0/0
+    rightsubnet=0.0.0.0/0
 
-    left=${LEFT}
-    leftid=${LEFTID}
+    if_id_in=${VTI_MARK}
+    if_id_out=${VTI_MARK}
+EOF
+else
+cat >> "$IPSEC_CONF" <<EOF
+
     leftsubnet=${LOCAL_SUBNET}
-
-    right=${RIGHT}
-    rightid=${RIGHTID}
     rightsubnet=${REMOTE_SUBNET}
-
-    ike=${IKE}
-    esp=${ESP}
-
-    dpddelay=${DPD_DELAY}
-    dpdtimeout=${DPD_TIMEOUT}
-    dpdaction=restart
-
-    rekey=${REKEY_VALUE}
-    reauth=no
 EOF
 fi
 
