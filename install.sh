@@ -45,16 +45,32 @@ install_packages() {
   apt install -y \
     curl \
     jq \
+    git \
+    tcpdump \
     iproute2 \
     iptables \
     ufw \
     unbound \
     strongswan \
+    strongswan-starter \
+    strongswan-libcharon \
     strongswan-pki \
     libcharon-extra-plugins \
     ca-certificates \
     tar \
     gzip
+}
+
+configure_kernel() {
+  modprobe ip_vti || true
+
+  cat >/etc/sysctl.d/99-boghche.conf <<EOF
+net.ipv4.ip_forward=1
+net.ipv4.conf.all.rp_filter=0
+net.ipv4.conf.default.rp_filter=0
+EOF
+
+  sysctl --system >/dev/null 2>&1 || true
 }
 
 install_gum() {
@@ -118,10 +134,11 @@ install_files() {
 }
 
 configure_systemd() {
-  if [ -f /etc/systemd/system/boghche.service ]; then
-    systemctl daemon-reload
-    systemctl enable boghche.service || true
-  fi
+  systemctl daemon-reload
+
+  systemctl enable strongswan-starter || true
+  systemctl enable unbound || true
+  systemctl enable boghche.service || true
 }
 
 validate_install() {
@@ -130,6 +147,7 @@ validate_install() {
   command -v ip >/dev/null
   command -v ipsec >/dev/null
   command -v unbound >/dev/null
+  command -v tcpdump >/dev/null
 
   echo "[✓] Validation successful"
 }
@@ -141,6 +159,7 @@ main() {
   check_os
   detect_arch
   install_packages
+  configure_kernel
   install_gum
   install_files
   configure_systemd
