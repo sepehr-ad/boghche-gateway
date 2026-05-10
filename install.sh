@@ -43,19 +43,19 @@ install_packages() {
   apt update
 
   apt install -y \
-    curl \
-    jq \
-    git \
-    tcpdump \
-    iproute2 \
-    iptables \
-    ufw \
-    unbound \
     strongswan \
     strongswan-starter \
     strongswan-libcharon \
     strongswan-pki \
     libcharon-extra-plugins \
+    iproute2 \
+    iptables \
+    jq \
+    curl \
+    git \
+    tcpdump \
+    unbound \
+    ufw \
     ca-certificates \
     tar \
     gzip
@@ -63,11 +63,14 @@ install_packages() {
 
 configure_kernel() {
   modprobe ip_vti || true
+  modprobe xfrm_user || true
 
   cat >/etc/sysctl.d/99-boghche.conf <<EOF
 net.ipv4.ip_forward=1
 net.ipv4.conf.all.rp_filter=0
 net.ipv4.conf.default.rp_filter=0
+net.ipv4.conf.all.accept_redirects=0
+net.ipv4.conf.default.accept_redirects=0
 EOF
 
   sysctl --system >/dev/null 2>&1 || true
@@ -125,7 +128,6 @@ install_files() {
   curl -fsSL "$REPO/lib/engine.sh" -o /usr/local/lib/boghche/engine.sh
   curl -fsSL "$REPO/lib/utils.sh" -o /usr/local/lib/boghche/utils.sh
   curl -fsSL "$REPO/lib/ipsec.sh" -o /usr/local/lib/boghche/ipsec.sh || true
-  curl -fsSL "$REPO/lib/vtiup.sh" -o /usr/local/lib/boghche/vtiup.sh || true
   curl -fsSL "$REPO/bin/boghche" -o /usr/local/bin/boghche
   curl -fsSL "$REPO/systemd/boghche.service" -o /etc/systemd/system/boghche.service || true
 
@@ -166,6 +168,10 @@ main() {
   validate_install
 
   echo "[✓] Installation complete"
+  echo "Recommended route-mode defaults:"
+  echo "  mtu=1480"
+  echo "  vti_addr=10.12.12.2/30"
+  echo "  vti_remote=10.12.12.1"
   echo "Run: sudo boghche"
 }
 
