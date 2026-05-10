@@ -4,6 +4,7 @@ set -euo pipefail
 source /usr/local/lib/boghche/utils.sh
 
 CONFIG="/etc/boghche/config.json"
+IPSEC_GENERATOR="/usr/local/lib/boghche/ipsec.sh"
 
 if [ ! -f "$CONFIG" ]; then
   echo "Config not found: $CONFIG"
@@ -53,6 +54,13 @@ fi
 
 echo "[vti-up] starting..."
 
+echo "[vti-up] generating strongSwan config..."
+if [ ! -x "$IPSEC_GENERATOR" ]; then
+  echo "IPsec generator not found or not executable: $IPSEC_GENERATOR"
+  exit 1
+fi
+"$IPSEC_GENERATOR"
+
 echo "[vti-up] restarting strongSwan in its own systemd service..."
 if command -v systemctl >/dev/null 2>&1; then
   systemctl restart strongswan-starter.service
@@ -73,11 +81,11 @@ sysctl -w net.ipv4.conf.default.rp_filter=0 >/dev/null || true
 sysctl -w net.ipv4.conf."$WAN_IF".rp_filter=0 >/dev/null 2>&1 || true
 sysctl -w net.ipv4.conf."$VTI_IF".rp_filter=0 >/dev/null || true
 sysctl -w net.ipv4.conf."$VTI_IF".disable_policy=1 >/dev/null || true
+# Match the known-good manual script: do not disable xfrm on the VTI device.
 sysctl -w net.ipv4.conf."$VTI_IF".disable_xfrm=0 >/dev/null 2>&1 || true
 
 grep -qE '^200[[:space:]]+vti' /etc/iproute2/rt_tables || echo "200 vti" >> /etc/iproute2/rt_tables
 
-# Remove stale Boghche VTI rules. Ignore failures so repeated restarts are safe.
 ip rule | awk '/lookup vti/ {gsub(":", "", $1); print $1}' | while read -r PRIO; do
   [ -n "$PRIO" ] && ip rule del priority "$PRIO" 2>/dev/null || true
 done
@@ -85,8 +93,6 @@ done
 ip route flush table vti 2>/dev/null || true
 
 VTI_IP="${VTI_ADDR%%/*}"
-
-# Add VTI source rule once. The exact priority is not critical, but stable priorities help debugging.
 ip rule add from "$VTI_IP/32" table vti priority 211 2>/dev/null || true
 
 PRIO=212
