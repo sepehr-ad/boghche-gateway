@@ -53,29 +53,32 @@ fi
 
 echo "[vti-up] starting..."
 
-echo "[vti-up] restarting ipsec..."
-ipsec restart
+echo "[vti-up] restarting strongSwan in its own systemd service..."
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl restart strongswan-starter.service
+else
+  ipsec restart
+fi
 sleep 3
 
 ip link del "$VTI_IF" 2>/dev/null || true
-
 ip link add "$VTI_IF" type vti local "$LEFT" remote "$RIGHT" key "$VTI_MARK"
 ip addr add "$VTI_ADDR" dev "$VTI_IF" 2>/dev/null || true
 ip link set "$VTI_IF" up
 ip link set "$VTI_IF" mtu "$MTU"
 
-sysctl -w net.ipv4.ip_forward=1 >/dev/null
-sysctl -w net.ipv4.conf.all.rp_filter=0 >/dev/null
-sysctl -w net.ipv4.conf.default.rp_filter=0 >/dev/null
+sysctl -w net.ipv4.ip_forward=1 >/dev/null || true
+sysctl -w net.ipv4.conf.all.rp_filter=0 >/dev/null || true
+sysctl -w net.ipv4.conf.default.rp_filter=0 >/dev/null || true
 sysctl -w net.ipv4.conf."$WAN_IF".rp_filter=0 >/dev/null 2>&1 || true
-sysctl -w net.ipv4.conf."$VTI_IF".rp_filter=0 >/dev/null
-sysctl -w net.ipv4.conf."$VTI_IF".disable_policy=1 >/dev/null
+sysctl -w net.ipv4.conf."$VTI_IF".rp_filter=0 >/dev/null || true
+sysctl -w net.ipv4.conf."$VTI_IF".disable_policy=1 >/dev/null || true
 sysctl -w net.ipv4.conf."$VTI_IF".disable_xfrm=0 >/dev/null 2>&1 || true
 
 grep -qE '^200[[:space:]]+vti' /etc/iproute2/rt_tables || echo "200 vti" >> /etc/iproute2/rt_tables
 
-ip rule | grep "lookup vti" | while read -r line; do
-  PRIO=$(echo "$line" | awk '{print $1}' | tr -d ':')
+# Remove stale Boghche VTI rules. Ignore failures so repeated restarts are safe.
+ip rule | awk '/lookup vti/ {gsub(":", "", $1); print $1}' | while read -r PRIO; do
   [ -n "$PRIO" ] && ip rule del priority "$PRIO" 2>/dev/null || true
 done
 
@@ -83,30 +86,37 @@ ip route flush table vti 2>/dev/null || true
 
 VTI_IP="${VTI_ADDR%%/*}"
 
+# Add VTI source rule once. The exact priority is not critical, but stable priorities help debugging.
+ip rule add from "$VTI_IP/32" table vti priority 211 2>/dev/null || true
+
+PRIO=212
 for NET in "${LANS[@]}"; do
   echo "[vti-up] Configuring LAN ${NET} on ${VTI_IF} ..."
 
-  ip rule add from "$VTI_IP/32" table vti 2>/dev/null || true
-  ip route replace "$NET" dev "$VTI_IF"
-  ip route replace "$NET" dev "$VTI_IF" table vti
-  ip rule add from "$NET" table vti 2>/dev/null || true
+  ip route replace "$NET" dev "$VTI_IF" 2>/dev/null || true
+  ip route replace "$NET" dev "$VTI_IF" table vti 2>/dev/null || true
+
+  ip rule del from "$NET" table vti 2>/dev/null || true
+  ip rule add from "$NET" table vti priority "$PRIO" 2>/dev/null || true
+  PRIO=$((PRIO + 1))
 done
 
-ip rule add iif "$WAN_IF" table vti 2>/dev/null || true
-ip route flush cache
+ip rule del iif "$WAN_IF" table vti 2>/dev/null || true
+ip rule add iif "$WAN_IF" table vti priority 209 2>/dev/null || true
+ip route flush cache 2>/dev/null || true
 
 if [ "$NAT" = "true" ]; then
-  iptables -t nat -F POSTROUTING
+  iptables -t nat -F POSTROUTING 2>/dev/null || true
   for NET in "${LANS[@]}"; do
-    iptables -t nat -A POSTROUTING -s "$NET" -o "$WAN_IF" -j MASQUERADE
+    iptables -t nat -A POSTROUTING -s "$NET" -o "$WAN_IF" -j MASQUERADE 2>/dev/null || true
   done
 fi
 
 iptables -C FORWARD -i "$VTI_IF" -o "$WAN_IF" -j ACCEPT 2>/dev/null || \
-  iptables -A FORWARD -i "$VTI_IF" -o "$WAN_IF" -j ACCEPT
+  iptables -A FORWARD -i "$VTI_IF" -o "$WAN_IF" -j ACCEPT 2>/dev/null || true
 
 iptables -C FORWARD -i "$WAN_IF" -o "$VTI_IF" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || \
-  iptables -A FORWARD -i "$WAN_IF" -o "$VTI_IF" -m state --state RELATED,ESTABLISHED -j ACCEPT
+  iptables -A FORWARD -i "$WAN_IF" -o "$VTI_IF" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
 
 echo "[vti-up] done."
 log "Boghche route engine applied mode=$MODE left=$LEFT right=$RIGHT if=$VTI_IF"
