@@ -18,66 +18,96 @@ VTI_IF=$(jq -r '.vti_if // "vti0"' "$CONFIG")
 VTI_ADDR=$(jq -r '.vti_addr // empty' "$CONFIG")
 VTI_MARK=$(jq -r '.vti_mark // "42"' "$CONFIG")
 MTU=$(jq -r '.mtu // "1480"' "$CONFIG")
-ROUTE_SUBNET=$(jq -r '.route_subnet // empty' "$CONFIG")
 NAT=$(jq -r '.nat // false' "$CONFIG")
-NAT_SOURCE=$(jq -r '.nat_source // empty' "$CONFIG")
+
+if [ "$MODE" != "route" ]; then
+  log "Boghche engine skipped route VTI setup mode=$MODE"
+  exit 0
+fi
+
+if [ -z "$LEFT" ] || [ -z "$RIGHT" ] || [ -z "$VTI_ADDR" ]; then
+  echo "Route mode requires left, right and vti_addr"
+  exit 1
+fi
+
+mapfile -t LANS < <(
+  jq -r '
+    [
+      (.lans[]? // empty),
+      (.route_subnets[]? // empty),
+      (.routes[]? // empty),
+      (.route_subnet // empty),
+      (.nat_sources[]? // empty),
+      (.nat_source // empty)
+    ]
+    | map(select(. != null and . != "" and . != "null" and . != "0.0.0.0/0"))
+    | unique[]
+  ' "$CONFIG"
+)
+
+if [ "${#LANS[@]}" -eq 0 ]; then
+  echo "Route mode requires at least one LAN/source subnet"
+  echo "Use route_subnet, route_subnets, lans, nat_source, or nat_sources in $CONFIG"
+  exit 1
+fi
+
+echo "[vti-up] starting..."
+
+echo "[vti-up] restarting ipsec..."
+ipsec restart
+sleep 3
+
+ip link del "$VTI_IF" 2>/dev/null || true
+
+ip link add "$VTI_IF" type vti local "$LEFT" remote "$RIGHT" key "$VTI_MARK"
+ip addr add "$VTI_ADDR" dev "$VTI_IF" 2>/dev/null || true
+ip link set "$VTI_IF" up
+ip link set "$VTI_IF" mtu "$MTU"
 
 sysctl -w net.ipv4.ip_forward=1 >/dev/null
 sysctl -w net.ipv4.conf.all.rp_filter=0 >/dev/null
 sysctl -w net.ipv4.conf.default.rp_filter=0 >/dev/null
-sysctl -w net.ipv4.conf.${WAN_IF}.rp_filter=0 >/dev/null 2>&1 || true
+sysctl -w net.ipv4.conf."$WAN_IF".rp_filter=0 >/dev/null 2>&1 || true
+sysctl -w net.ipv4.conf."$VTI_IF".rp_filter=0 >/dev/null
+sysctl -w net.ipv4.conf."$VTI_IF".disable_policy=1 >/dev/null
+sysctl -w net.ipv4.conf."$VTI_IF".disable_xfrm=0 >/dev/null 2>&1 || true
 
-if ! grep -qE '^200[[:space:]]+vti' /etc/iproute2/rt_tables; then
-  echo '200 vti' >> /etc/iproute2/rt_tables
-fi
+grep -qE '^200[[:space:]]+vti' /etc/iproute2/rt_tables || echo "200 vti" >> /etc/iproute2/rt_tables
 
-if [ "$MODE" = "route" ]; then
-  if [ -z "$LEFT" ] || [ -z "$RIGHT" ] || [ -z "$VTI_ADDR" ]; then
-    echo "Route mode requires left, right and vti_addr"
-    exit 1
-  fi
+ip rule | grep "lookup vti" | while read -r line; do
+  PRIO=$(echo "$line" | awk '{print $1}' | tr -d ':')
+  [ -n "$PRIO" ] && ip rule del priority "$PRIO" 2>/dev/null || true
+done
 
-  ip link del "$VTI_IF" 2>/dev/null || true
-  ip link add "$VTI_IF" type vti local "$LEFT" remote "$RIGHT" key "$VTI_MARK"
-  ip addr add "$VTI_ADDR" dev "$VTI_IF" 2>/dev/null || true
-  ip link set "$VTI_IF" up
-  ip link set "$VTI_IF" mtu "$MTU"
+ip route flush table vti 2>/dev/null || true
 
-  # Match the known-good manual VTI setup: disable policy only, keep xfrm enabled.
-  sysctl -w net.ipv4.conf.${VTI_IF}.rp_filter=0 >/dev/null 2>&1 || true
-  sysctl -w net.ipv4.conf.${VTI_IF}.disable_policy=1 >/dev/null 2>&1 || true
-  sysctl -w net.ipv4.conf.${VTI_IF}.disable_xfrm=0 >/dev/null 2>&1 || true
+VTI_IP="${VTI_ADDR%%/*}"
 
-  ip route flush table vti 2>/dev/null || true
+for NET in "${LANS[@]}"; do
+  echo "[vti-up] Configuring LAN ${NET} on ${VTI_IF} ..."
 
-  while ip rule show | grep -q "lookup vti"; do
-    PRIO=$(ip rule show | awk '/lookup vti/ {print $1; exit}' | tr -d ':')
-    [ -n "$PRIO" ] && ip rule del priority "$PRIO" 2>/dev/null || break
-  done
-
-  VTI_IP="${VTI_ADDR%%/*}"
   ip rule add from "$VTI_IP/32" table vti 2>/dev/null || true
+  ip route replace "$NET" dev "$VTI_IF"
+  ip route replace "$NET" dev "$VTI_IF" table vti
+  ip rule add from "$NET" table vti 2>/dev/null || true
+done
 
-  if [ -n "$ROUTE_SUBNET" ] && [ "$ROUTE_SUBNET" != "null" ] && [ "$ROUTE_SUBNET" != "0.0.0.0/0" ]; then
-    ip route replace "$ROUTE_SUBNET" dev "$VTI_IF"
-    ip route replace "$ROUTE_SUBNET" dev "$VTI_IF" table vti
-    ip rule add from "$ROUTE_SUBNET" table vti 2>/dev/null || true
-  fi
+ip rule add iif "$WAN_IF" table vti 2>/dev/null || true
+ip route flush cache
 
-  ip rule add iif "$WAN_IF" table vti 2>/dev/null || true
-  ip route flush cache
-
-  if [ "$NAT" = "true" ] && [ -n "$NAT_SOURCE" ] && [ "$NAT_SOURCE" != "null" ]; then
-    iptables -t nat -C POSTROUTING -s "$NAT_SOURCE" -o "$WAN_IF" -j MASQUERADE 2>/dev/null || \
-      iptables -t nat -A POSTROUTING -s "$NAT_SOURCE" -o "$WAN_IF" -j MASQUERADE
-
-    iptables -C FORWARD -i "$VTI_IF" -o "$WAN_IF" -j ACCEPT 2>/dev/null || \
-      iptables -A FORWARD -i "$VTI_IF" -o "$WAN_IF" -j ACCEPT
-
-    iptables -C FORWARD -i "$WAN_IF" -o "$VTI_IF" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || \
-      iptables -A FORWARD -i "$WAN_IF" -o "$VTI_IF" -m state --state RELATED,ESTABLISHED -j ACCEPT
-  fi
+if [ "$NAT" = "true" ]; then
+  iptables -t nat -F POSTROUTING
+  for NET in "${LANS[@]}"; do
+    iptables -t nat -A POSTROUTING -s "$NET" -o "$WAN_IF" -j MASQUERADE
+  done
 fi
 
-log "Boghche engine applied mode=$MODE left=$LEFT right=$RIGHT"
+iptables -C FORWARD -i "$VTI_IF" -o "$WAN_IF" -j ACCEPT 2>/dev/null || \
+  iptables -A FORWARD -i "$VTI_IF" -o "$WAN_IF" -j ACCEPT
+
+iptables -C FORWARD -i "$WAN_IF" -o "$VTI_IF" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || \
+  iptables -A FORWARD -i "$WAN_IF" -o "$VTI_IF" -m state --state RELATED,ESTABLISHED -j ACCEPT
+
+echo "[vti-up] done."
+log "Boghche route engine applied mode=$MODE left=$LEFT right=$RIGHT if=$VTI_IF"
 exit 0
