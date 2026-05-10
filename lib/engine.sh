@@ -17,7 +17,7 @@ WAN_IF=$(jq -r '.wan_if // "eth0"' "$CONFIG")
 VTI_IF=$(jq -r '.vti_if // "vti0"' "$CONFIG")
 VTI_ADDR=$(jq -r '.vti_addr // empty' "$CONFIG")
 VTI_MARK=$(jq -r '.vti_mark // "42"' "$CONFIG")
-MTU=$(jq -r '.mtu // "1436"' "$CONFIG")
+MTU=$(jq -r '.mtu // "1480"' "$CONFIG")
 ROUTE_SUBNET=$(jq -r '.route_subnet // empty' "$CONFIG")
 NAT=$(jq -r '.nat // false' "$CONFIG")
 NAT_SOURCE=$(jq -r '.nat_source // empty' "$CONFIG")
@@ -38,18 +38,15 @@ if [ "$MODE" = "route" ]; then
   fi
 
   ip link del "$VTI_IF" 2>/dev/null || true
-
   ip link add "$VTI_IF" type vti local "$LEFT" remote "$RIGHT" key "$VTI_MARK"
-
   ip addr add "$VTI_ADDR" dev "$VTI_IF" 2>/dev/null || true
-
   ip link set "$VTI_IF" up
-
   ip link set "$VTI_IF" mtu "$MTU"
 
+  # Match the known-good manual VTI setup: disable policy only, keep xfrm enabled.
   sysctl -w net.ipv4.conf.${VTI_IF}.rp_filter=0 >/dev/null 2>&1 || true
   sysctl -w net.ipv4.conf.${VTI_IF}.disable_policy=1 >/dev/null 2>&1 || true
-  sysctl -w net.ipv4.conf.${VTI_IF}.disable_xfrm=1 >/dev/null 2>&1 || true
+  sysctl -w net.ipv4.conf.${VTI_IF}.disable_xfrm=0 >/dev/null 2>&1 || true
 
   ip route flush table vti 2>/dev/null || true
 
@@ -59,7 +56,6 @@ if [ "$MODE" = "route" ]; then
   done
 
   VTI_IP="${VTI_ADDR%%/*}"
-
   ip rule add from "$VTI_IP/32" table vti 2>/dev/null || true
 
   if [ -n "$ROUTE_SUBNET" ] && [ "$ROUTE_SUBNET" != "null" ] && [ "$ROUTE_SUBNET" != "0.0.0.0/0" ]; then
@@ -69,7 +65,6 @@ if [ "$MODE" = "route" ]; then
   fi
 
   ip rule add iif "$WAN_IF" table vti 2>/dev/null || true
-
   ip route flush cache
 
   if [ "$NAT" = "true" ] && [ -n "$NAT_SOURCE" ] && [ "$NAT_SOURCE" != "null" ]; then
