@@ -5,8 +5,8 @@ source /usr/local/lib/boghche/utils.sh
 
 CONFIG="/etc/boghche/config.json"
 IPSEC_GENERATOR="/usr/local/lib/boghche/ipsec.sh"
-TABLE_ID="200"
-TABLE_NAME="vti"
+TABLE_ID=220
+TABLE_NAME=vti
 NAT_CHAIN="BOGHCHE-POSTROUTING"
 DEFAULT_LANS=(
   "192.168.0.0/16"
@@ -40,35 +40,15 @@ if [ -z "$LEFT" ] || [ -z "$RIGHT" ] || [ -z "$VTI_ADDR" ]; then
 fi
 
 mapfile -t CONFIG_LANS < <(
-  jq -r '
-    [
-      (.lans[]? // empty),
-      (.default_lans[]? // empty),
-      (.route_subnets[]? // empty),
-      (.routes[]? // empty),
-      (.route_subnet // empty),
-      (.nat_sources[]? // empty),
-      (.nat_source // empty)
-    ]
-    | map(select(. != null and . != "" and . != "null" and . != "0.0.0.0/0"))
-    | unique[]
-  ' "$CONFIG"
+  jq -r '.lans[]? // empty' "$CONFIG")
 )
 
-mapfile -t LANS < <(
-  {
-    printf '%s\n' "${DEFAULT_LANS[@]}"
-    printf '%s\n' "${CONFIG_LANS[@]}"
-  } | awk 'NF' | sort -u
-)
+LANS=( "${DEFAULT_LANS[@]}" "${CONFIG_LANS[@]}" )
+LANS=( $(printf '%s
+' "${LANS[@]}" | sort -u) )
 
 echo "[vti-up] starting..."
 
-echo "[vti-up] generating strongSwan config..."
-if [ ! -x "$IPSEC_GENERATOR" ]; then
-  echo "IPsec generator not found or not executable: $IPSEC_GENERATOR"
-  exit 1
-fi
 "$IPSEC_GENERATOR"
 
 echo "[vti-up] restarting strongSwan in its own systemd service..."
@@ -80,7 +60,7 @@ fi
 sleep 3
 
 ip link del "$VTI_IF" 2>/dev/null || true
-ip link add "$VTI_IF" type vti local "$LEFT" remote "$RIGHT" key "$VTI_MARK"
+ip link add "$VTI_IF" type vti local "$LEFT" remote "$RIGHT" ikey "$VTI_MARK" okey "$VTI_MARK"
 ip addr add "$VTI_ADDR" dev "$VTI_IF" 2>/dev/null || true
 ip link set "$VTI_IF" up
 ip link set "$VTI_IF" mtu "$MTU"
@@ -91,7 +71,6 @@ sysctl -w net.ipv4.conf.default.rp_filter=0 >/dev/null || true
 sysctl -w net.ipv4.conf."$WAN_IF".rp_filter=0 >/dev/null 2>&1 || true
 sysctl -w net.ipv4.conf."$VTI_IF".rp_filter=0 >/dev/null || true
 sysctl -w net.ipv4.conf."$VTI_IF".disable_policy=1 >/dev/null || true
-# Match the known-good manual setup: do not disable xfrm on the VTI device.
 sysctl -w net.ipv4.conf."$VTI_IF".disable_xfrm=0 >/dev/null 2>&1 || true
 
 if ! grep -qE "^${TABLE_ID}[[:space:]]+${TABLE_NAME}$" /etc/iproute2/rt_tables; then
@@ -108,10 +87,8 @@ ip rule add from "$VTI_IP/32" table "$TABLE_NAME" priority 211 2>/dev/null || tr
 PRIO=212
 for NET in "${LANS[@]}"; do
   echo "[vti-up] Configuring LAN ${NET} on ${VTI_IF} ..."
-
   ip route replace "$NET" dev "$VTI_IF" 2>/dev/null || true
   ip route replace "$NET" dev "$VTI_IF" table "$TABLE_NAME" 2>/dev/null || true
-
   ip rule add from "$NET" table "$TABLE_NAME" priority "$PRIO" 2>/dev/null || true
   PRIO=$((PRIO + 1))
 done
@@ -125,7 +102,6 @@ iptables -t nat -F "$NAT_CHAIN" 2>/dev/null || true
 if [ "$NAT" = "true" ]; then
   iptables -t nat -C POSTROUTING -j "$NAT_CHAIN" 2>/dev/null || \
     iptables -t nat -A POSTROUTING -j "$NAT_CHAIN" 2>/dev/null || true
-
   for NET in "${LANS[@]}"; do
     iptables -t nat -A "$NAT_CHAIN" -s "$NET" -o "$WAN_IF" -j MASQUERADE 2>/dev/null || true
   done
