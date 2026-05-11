@@ -2,6 +2,7 @@
 set -euo pipefail
 
 CONFIG="/etc/boghche/config.json"
+DEFAULT_LANS='["192.168.0.0/16","172.16.0.0/16","172.18.0.0/16"]'
 
 need_root() {
   if [ "${EUID}" -ne 0 ]; then
@@ -76,26 +77,26 @@ configure() {
   VTI_ADDR=""
   VTI_REMOTE=""
   VTI_MARK=""
-  ROUTE_SUBNET=""
-  NAT_SOURCE=""
+  ROUTE_SUBNETS="[]"
   LOCAL_SUBNET=""
   REMOTE_SUBNET=""
   MTU=""
 
   if [ "$MODE" = "route" ]; then
     gum style --foreground 14 "Route-based / VTI settings"
-    gum style --foreground 8 "Example VTI IP: 10.11.11.2/30"
+    gum style --foreground 8 "Default routed LANs: 192.168.0.0/16, 172.16.0.0/16, 172.18.0.0/16"
 
     VTI_IF=$(ask "VTI interface name" "vti0")
     VTI_ADDR=$(ask "VTI local address with CIDR" "10.11.11.2/30")
     VTI_REMOTE=$(ask "VTI remote gateway address" "10.11.11.1")
     VTI_MARK=$(ask "VTI mark/key" "42")
+    MTU=$(ask "VTI MTU" "1480")
 
-    gum style --foreground 8 "Remote network routed over tunnel"
-    ROUTE_SUBNET=$(ask "Primary routed subnet via tunnel" "172.16.0.0/16")
+    EXTRA_ROUTE=$(ask "Optional extra routed subnet (leave empty if none)")
 
-    NAT_SOURCE=$(ask "Optional NAT source subnet" "")
-    MTU=$(ask "VTI MTU" "1436")
+    if [ -n "$EXTRA_ROUTE" ]; then
+      ROUTE_SUBNETS=$(jq -cn --arg subnet "$EXTRA_ROUTE" '[ $subnet ]')
+    fi
   else
     gum style --foreground 14 "Policy-based settings"
     LOCAL_SUBNET=$(ask "Local protected subnet / leftsubnet")
@@ -123,12 +124,12 @@ configure() {
     --arg vti_addr "$VTI_ADDR" \
     --arg vti_remote "$VTI_REMOTE" \
     --arg vti_mark "$VTI_MARK" \
-    --arg route_subnet "$ROUTE_SUBNET" \
-    --arg nat_source "$NAT_SOURCE" \
     --arg mtu "$MTU" \
     --arg local_subnet "$LOCAL_SUBNET" \
     --arg remote_subnet "$REMOTE_SUBNET" \
-    '{mode:$mode,conn_name:$conn_name,left:$left,leftid:$leftid,right:$right,rightid:$rightid,psk:$psk,ike:$ike,esp:$esp,dpd_delay:$dpd_delay,dpd_timeout:$dpd_timeout,rekey:($rekey=="true"),wan_if:$wan_if,nat:($nat=="true"),vti_if:$vti_if,vti_addr:$vti_addr,vti_remote:$vti_remote,vti_mark:$vti_mark,route_subnet:$route_subnet,nat_source:$nat_source,mtu:$mtu,local_subnet:$local_subnet,remote_subnet:$remote_subnet}' > "$CONFIG"
+    --argjson default_lans "$DEFAULT_LANS" \
+    --argjson route_subnets "$ROUTE_SUBNETS" \
+    '{mode:$mode,conn_name:$conn_name,left:$left,leftid:$leftid,right:$right,rightid:$rightid,psk:$psk,ike:$ike,esp:$esp,dpd_delay:$dpd_delay,dpd_timeout:$dpd_timeout,rekey:($rekey=="true"),wan_if:$wan_if,nat:($nat=="true"),vti_if:$vti_if,vti_addr:$vti_addr,vti_remote:$vti_remote,vti_mark:$vti_mark,mtu:$mtu,default_lans:$default_lans,route_subnets:$route_subnets,local_subnet:$local_subnet,remote_subnet:$remote_subnet}' > "$CONFIG"
 
   chmod 600 "$CONFIG"
   gum style --foreground 10 "✔ Configuration saved to $CONFIG"
@@ -145,7 +146,7 @@ add_tunnel_route() {
   VTI_IF=$(jq -r '.vti_if // "vti0"' "$CONFIG")
 
   gum style --foreground 14 "Add Tunnel Route"
-  gum style --foreground 8 "Example: 172.16.0.0/16 or 10.20.30.0/24"
+  gum style --foreground 8 "Example: 10.20.30.0/24"
 
   ROUTE=$(gum input --placeholder "Subnet to route through ${VTI_IF}")
 
@@ -154,9 +155,16 @@ add_tunnel_route() {
     return
   fi
 
-  ip route replace "$ROUTE" dev "$VTI_IF"
+  TMP=$(mktemp)
+  jq --arg route "$ROUTE" '
+    .route_subnets = ((.route_subnets // []) + [$route] | unique)
+  ' "$CONFIG" > "$TMP"
 
-  gum style --foreground 10 "✔ Route ${ROUTE} added via ${VTI_IF}"
+  mv "$TMP" "$CONFIG"
+
+  systemctl restart boghche >/dev/null 2>&1 || true
+
+  gum style --foreground 10 "✔ Persistent route ${ROUTE} added via ${VTI_IF}"
 }
 
 add_ufw_rule() {
