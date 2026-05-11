@@ -40,12 +40,11 @@ if [ -z "$LEFT" ] || [ -z "$RIGHT" ] || [ -z "$VTI_ADDR" ]; then
 fi
 
 mapfile -t CONFIG_LANS < <(
-  jq -r '.lans[]? // empty' "$CONFIG")
+  jq -r '.lans[]? // empty' "$CONFIG"
 )
 
 LANS=( "${DEFAULT_LANS[@]}" "${CONFIG_LANS[@]}" )
-LANS=( $(printf '%s
-' "${LANS[@]}" | sort -u) )
+mapfile -t LANS < <(printf '%s\n' "${LANS[@]}" | sort -u)
 
 echo "[vti-up] starting..."
 
