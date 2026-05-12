@@ -172,8 +172,8 @@ main() {
   echo "[✓] Installation complete"
   echo "Recommended route-mode defaults:"
   echo "  mtu=1480"
-  echo "  vti_addr=10.12.12.2/30"
-  echo "  vti_remote=10.12.12.1"
+  echo "  vti_addr"
+  echo "  vti_remote"
   echo "Run: sudo boghche"
 }
 
