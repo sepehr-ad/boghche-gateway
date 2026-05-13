@@ -24,6 +24,7 @@ MODE=$(jq -r '.mode // "route"' "$CONFIG")
 LEFT=$(jq -r '.left // .pub_ip // empty' "$CONFIG")
 RIGHT=$(jq -r '.right // .fgt_ip // empty' "$CONFIG")
 WAN_IF=$(jq -r '.wan_if // "eth0"' "$CONFIG")
+WAN_GW=$(jq -r '.wan_gw // empty' "$CONFIG")
 VTI_IF=$(jq -r '.vti_if // "vti0"' "$CONFIG")
 VTI_ADDR=$(jq -r '.vti_addr // empty' "$CONFIG")
 VTI_MARK=$(jq -r '.vti_mark // .mark // "42"' "$CONFIG")
@@ -60,7 +61,7 @@ fi
 sleep 3
 
 ip link del "$VTI_IF" 2>/dev/null || true
-ip link add "$VTI_IF" type vti local "$LEFT" remote "$RIGHT" ikey "$VTI_MARK" okey "$VTI_MARK"
+ip link add "$VTI_IF" type vti local "$LEFT" remote "$RIGHT" key "$VTI_MARK"
 ip addr add "$VTI_ADDR" dev "$VTI_IF" 2>/dev/null || true
 ip link set "$VTI_IF" up
 ip link set "$VTI_IF" mtu "$MTU"
@@ -73,13 +74,23 @@ sysctl -w net.ipv4.conf."$VTI_IF".rp_filter=0 >/dev/null || true
 sysctl -w net.ipv4.conf."$VTI_IF".disable_policy=1 >/dev/null || true
 sysctl -w net.ipv4.conf."$VTI_IF".disable_xfrm=0 >/dev/null 2>&1 || true
 
-if ! grep -qE "^${TABLE_ID}[[:space:]]+${TABLE_NAME}$" /etc/iproute2/rt_tables; then
-  sed -i "/[[:space:]]${TABLE_NAME}$/d" /etc/iproute2/rt_tables 2>/dev/null || true
-  echo "${TABLE_ID} ${TABLE_NAME}" >> /etc/iproute2/rt_tables
-fi
+# Keep the legacy working layout: table 220 is named "vti".
+# It contains both the VTI/LAN routes and the WAN default fallback.
+sed -i "/^[0-9][0-9]*[[:space:]]\+${TABLE_NAME}$/d" /etc/iproute2/rt_tables 2>/dev/null || true
+echo "${TABLE_ID} ${TABLE_NAME}" >> /etc/iproute2/rt_tables
 
 while ip rule del table "$TABLE_NAME" 2>/dev/null; do :; done
 ip route flush table "$TABLE_NAME" 2>/dev/null || true
+
+if [ -z "$WAN_GW" ]; then
+  WAN_GW=$(ip -4 route show default dev "$WAN_IF" 2>/dev/null | awk '/^default/ {print $3; exit}')
+fi
+
+if [ -n "$WAN_GW" ]; then
+  ip route replace default via "$WAN_GW" dev "$WAN_IF" table "$TABLE_NAME" 2>/dev/null || true
+else
+  ip route replace default dev "$WAN_IF" table "$TABLE_NAME" 2>/dev/null || true
+fi
 
 VTI_IP="${VTI_ADDR%%/*}"
 ip rule add from "$VTI_IP/32" table "$TABLE_NAME" priority 211 2>/dev/null || true
@@ -94,6 +105,7 @@ for NET in "${LANS[@]}"; do
 done
 
 ip rule add iif "$WAN_IF" table "$TABLE_NAME" priority 209 2>/dev/null || true
+ip rule add from all table "$TABLE_NAME" priority 220 2>/dev/null || true
 ip route flush cache 2>/dev/null || true
 
 iptables -t nat -N "$NAT_CHAIN" 2>/dev/null || true
@@ -116,5 +128,5 @@ iptables -C FORWARD -i "$WAN_IF" -o "$VTI_IF" -m state --state RELATED,ESTABLISH
   iptables -A FORWARD -i "$WAN_IF" -o "$VTI_IF" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
 
 echo "[vti-up] done."
-log "Boghche route engine applied mode=$MODE left=$LEFT right=$RIGHT if=$VTI_IF lans=${LANS[*]}"
+log "Boghche route engine applied mode=$MODE left=$LEFT right=$RIGHT if=$VTI_IF table=${TABLE_ID}/${TABLE_NAME} lans=${LANS[*]}"
 exit 0
