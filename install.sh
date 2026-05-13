@@ -129,7 +129,8 @@ install_files() {
 
   curl -fsSL "$REPO/lib/engine.sh" -o /usr/local/lib/boghche/engine.sh
   curl -fsSL "$REPO/lib/utils.sh" -o /usr/local/lib/boghche/utils.sh
-  curl -fsSL "$REPO/lib/ipsec.sh" -o /usr/local/lib/boghche/ipsec.sh || true
+  curl -fsSL "$REPO/lib/ipsec.sh" -o /usr/local/lib/boghche/ipsec.sh
+  curl -fsSL "$REPO/lib/unbound.sh" -o /usr/local/lib/boghche/unbound.sh
   curl -fsSL "$REPO/bin/boghche" -o /usr/local/bin/boghche
   curl -fsSL "$REPO/systemd/boghche.service" -o /etc/systemd/system/boghche.service || true
 
