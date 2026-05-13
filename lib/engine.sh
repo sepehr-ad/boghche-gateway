@@ -83,10 +83,10 @@ sysctl -w net.ipv4.conf."$VTI_IF".disable_policy=1 >/dev/null || true
 sed -i "/^[0-9][0-9]*[[:space:]]\+${TABLE_NAME}$/d" /etc/iproute2/rt_tables 2>/dev/null || true
 echo "${TABLE_ID} ${TABLE_NAME}" >> /etc/iproute2/rt_tables
 
-ip rule | grep "lookup ${TABLE_NAME}" | while read -r line; do
+while read -r line; do
   PRIO=$(echo "$line" | awk '{print $1}' | tr -d ':')
   [ -n "$PRIO" ] && ip rule del priority "$PRIO" 2>/dev/null || true
-done
+done < <(ip rule | grep "lookup ${TABLE_NAME}" || true)
 
 ip route flush table "$TABLE_NAME" 2>/dev/null || true
 
