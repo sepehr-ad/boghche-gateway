@@ -70,8 +70,6 @@ EOF
 if [ "$MODE" = "route" ]; then
 cat >> "$IPSEC_CONF" <<EOF
 
-    leftsubnet=0.0.0.0/0
-    rightsubnet=0.0.0.0/0
 EOF
 else
 cat >> "$IPSEC_CONF" <<EOF
