@@ -103,6 +103,23 @@ configure() {
     REMOTE_SUBNET=$(ask "Remote protected subnet / rightsubnet")
   fi
 
+  UNBOUND="false"
+  UNBOUND_LISTEN_IP=""
+  DNS_UPSTREAMS='[]'
+
+  if [ "$MODE" = "route" ]; then
+    gum style --foreground 14 "DNS / Unbound settings"
+    UNBOUND=$(yn "Configure Unbound DNS-over-TLS on the VTI IP?")
+
+    if [ "$UNBOUND" = "true" ]; then
+      DEFAULT_VTI_IP="${VTI_ADDR%%/*}"
+      UNBOUND_LISTEN_IP=$(ask "Unbound listen IP" "$DEFAULT_VTI_IP")
+      PRIMARY_DNS=$(ask "Primary DoT upstream" "8.8.8.8@853#dns.google")
+      SECONDARY_DNS=$(ask "Secondary DoT upstream" "8.8.4.4@853#dns.google")
+      DNS_UPSTREAMS=$(jq -cn --arg primary "$PRIMARY_DNS" --arg secondary "$SECONDARY_DNS" '[ $primary, $secondary ]')
+    fi
+  fi
+
   mkdir -p /etc/boghche
 
   jq -n \
@@ -127,9 +144,12 @@ configure() {
     --arg mtu "$MTU" \
     --arg local_subnet "$LOCAL_SUBNET" \
     --arg remote_subnet "$REMOTE_SUBNET" \
+    --arg unbound "$UNBOUND" \
+    --arg unbound_listen_ip "$UNBOUND_LISTEN_IP" \
+    --argjson dns_upstreams "$DNS_UPSTREAMS" \
     --argjson default_lans "$DEFAULT_LANS" \
     --argjson route_subnets "$ROUTE_SUBNETS" \
-    '{mode:$mode,conn_name:$conn_name,left:$left,leftid:$leftid,right:$right,rightid:$rightid,psk:$psk,ike:$ike,esp:$esp,dpd_delay:$dpd_delay,dpd_timeout:$dpd_timeout,rekey:($rekey=="true"),wan_if:$wan_if,nat:($nat=="true"),vti_if:$vti_if,vti_addr:$vti_addr,vti_remote:$vti_remote,vti_mark:$vti_mark,mtu:$mtu,default_lans:$default_lans,route_subnets:$route_subnets,local_subnet:$local_subnet,remote_subnet:$remote_subnet}' > "$CONFIG"
+    '{mode:$mode,conn_name:$conn_name,left:$left,leftid:$leftid,right:$right,rightid:$rightid,psk:$psk,ike:$ike,esp:$esp,dpd_delay:$dpd_delay,dpd_timeout:$dpd_timeout,rekey:($rekey=="true"),wan_if:$wan_if,nat:($nat=="true"),vti_if:$vti_if,vti_addr:$vti_addr,vti_remote:$vti_remote,vti_mark:$vti_mark,mtu:$mtu,default_lans:$default_lans,route_subnets:$route_subnets,local_subnet:$local_subnet,remote_subnet:$remote_subnet,unbound:($unbound=="true"),unbound_listen_ip:$unbound_listen_ip,dns_upstreams:$dns_upstreams}' > "$CONFIG"
 
   chmod 600 "$CONFIG"
   gum style --foreground 10 "✔ Configuration saved to $CONFIG"
