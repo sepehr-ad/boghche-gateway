@@ -60,6 +60,13 @@ else
 fi
 sleep 3
 
+# Legacy iptables mangle MARK rules break marked VTI/XFRM template matching on some hosts.
+# The old working VPS had no legacy mangle MARK rules, so keep that table clean before VTI setup.
+if command -v iptables-legacy >/dev/null 2>&1; then
+  iptables-legacy -t mangle -F PREROUTING 2>/dev/null || true
+  iptables-legacy -t mangle -F OUTPUT 2>/dev/null || true
+fi
+
 ip link del "$VTI_IF" 2>/dev/null || true
 ip link add "$VTI_IF" type vti local "$LEFT" remote "$RIGHT" key "$VTI_MARK"
 ip addr add "$VTI_ADDR" dev "$VTI_IF" 2>/dev/null || true
