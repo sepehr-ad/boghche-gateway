@@ -50,9 +50,11 @@ conn ${CONN_NAME}
 
     left=${LEFT}
     leftid=${LEFTID}
+    leftsubnet=${LOCAL_SUBNET}
 
     right=${RIGHT}
     rightid=${RIGHTID}
+    rightsubnet=${REMOTE_SUBNET}
 
     ike=${IKE}
     esp=${ESP}
@@ -67,17 +69,7 @@ conn ${CONN_NAME}
     reauth=no
 EOF
 
-if [ "$MODE" = "route" ]; then
-cat >> "$IPSEC_CONF" <<EOF
 
-EOF
-else
-cat >> "$IPSEC_CONF" <<EOF
-
-    leftsubnet=${LOCAL_SUBNET}
-    rightsubnet=${REMOTE_SUBNET}
-EOF
-fi
 
 cat > "$IPSEC_SECRETS" <<EOF
 ${LEFTID} ${RIGHTID} : PSK "${PSK}"
