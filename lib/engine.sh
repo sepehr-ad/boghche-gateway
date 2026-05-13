@@ -5,7 +5,7 @@ source /usr/local/lib/boghche/utils.sh
 
 CONFIG="/etc/boghche/config.json"
 IPSEC_GENERATOR="/usr/local/lib/boghche/ipsec.sh"
-TABLE_ID=220
+TABLE_ID=200
 TABLE_NAME=vti
 NAT_CHAIN="BOGHCHE-POSTROUTING"
 DEFAULT_LANS=(
@@ -24,7 +24,6 @@ MODE=$(jq -r '.mode // "route"' "$CONFIG")
 LEFT=$(jq -r '.left // .pub_ip // empty' "$CONFIG")
 RIGHT=$(jq -r '.right // .fgt_ip // empty' "$CONFIG")
 WAN_IF=$(jq -r '.wan_if // "eth0"' "$CONFIG")
-WAN_GW=$(jq -r '.wan_gw // empty' "$CONFIG")
 VTI_IF=$(jq -r '.vti_if // "vti0"' "$CONFIG")
 VTI_ADDR=$(jq -r '.vti_addr // empty' "$CONFIG")
 VTI_MARK=$(jq -r '.vti_mark // .mark // "42"' "$CONFIG")
@@ -48,11 +47,12 @@ mapfile -t CONFIG_LANS < <(
 LANS=( "${DEFAULT_LANS[@]}" "${CONFIG_LANS[@]}" )
 mapfile -t LANS < <(printf '%s\n' "${LANS[@]}" | sort -u)
 
+VTI_IP="${VTI_ADDR%%/*}"
+
 echo "[vti-up] starting..."
 
 "$IPSEC_GENERATOR"
 
-echo "[vti-up] restarting strongSwan in its own systemd service..."
 if command -v systemctl >/dev/null 2>&1; then
   systemctl restart strongswan-starter.service
 else
@@ -72,40 +72,30 @@ sysctl -w net.ipv4.conf.default.rp_filter=0 >/dev/null || true
 sysctl -w net.ipv4.conf."$WAN_IF".rp_filter=0 >/dev/null 2>&1 || true
 sysctl -w net.ipv4.conf."$VTI_IF".rp_filter=0 >/dev/null || true
 sysctl -w net.ipv4.conf."$VTI_IF".disable_policy=1 >/dev/null || true
-sysctl -w net.ipv4.conf."$VTI_IF".disable_xfrm=0 >/dev/null 2>&1 || true
 
-# Keep the legacy working layout: table 220 is named "vti".
-# It contains both the VTI/LAN routes and the WAN default fallback.
 sed -i "/^[0-9][0-9]*[[:space:]]\+${TABLE_NAME}$/d" /etc/iproute2/rt_tables 2>/dev/null || true
 echo "${TABLE_ID} ${TABLE_NAME}" >> /etc/iproute2/rt_tables
 
-while ip rule del table "$TABLE_NAME" 2>/dev/null; do :; done
-ip route flush table "$TABLE_NAME" 2>/dev/null || true
-
-if [ -z "$WAN_GW" ]; then
-  WAN_GW=$(ip -4 route show default dev "$WAN_IF" 2>/dev/null | awk '/^default/ {print $3; exit}')
-fi
-
-if [ -n "$WAN_GW" ]; then
-  ip route replace default via "$WAN_GW" dev "$WAN_IF" table "$TABLE_NAME" 2>/dev/null || true
-else
-  ip route replace default dev "$WAN_IF" table "$TABLE_NAME" 2>/dev/null || true
-fi
-
-VTI_IP="${VTI_ADDR%%/*}"
-ip rule add from "$VTI_IP/32" table "$TABLE_NAME" priority 211 2>/dev/null || true
-
-PRIO=212
-for NET in "${LANS[@]}"; do
-  echo "[vti-up] Configuring LAN ${NET} on ${VTI_IF} ..."
-  ip route replace "$NET" dev "$VTI_IF" 2>/dev/null || true
-  ip route replace "$NET" dev "$VTI_IF" table "$TABLE_NAME" 2>/dev/null || true
-  ip rule add from "$NET" table "$TABLE_NAME" priority "$PRIO" 2>/dev/null || true
-  PRIO=$((PRIO + 1))
+ip rule | grep "lookup ${TABLE_NAME}" | while read -r line; do
+  PRIO=$(echo "$line" | awk '{print $1}' | tr -d ':')
+  [ -n "$PRIO" ] && ip rule del priority "$PRIO" 2>/dev/null || true
 done
 
-ip rule add iif "$WAN_IF" table "$TABLE_NAME" priority 209 2>/dev/null || true
-ip rule add from all table "$TABLE_NAME" priority 220 2>/dev/null || true
+ip route flush table "$TABLE_NAME" 2>/dev/null || true
+
+ip rule add from "$VTI_IP/32" table "$TABLE_NAME" 2>/dev/null || true
+
+for NET in "${LANS[@]}"; do
+  echo "[vti-up] Configuring LAN ${NET} on ${VTI_IF} ..."
+
+  ip route replace "$NET" dev "$VTI_IF" 2>/dev/null || true
+  ip route replace "$NET" dev "$VTI_IF" table "$TABLE_NAME" 2>/dev/null || true
+
+  ip rule add from "$NET" table "$TABLE_NAME" 2>/dev/null || true
+done
+
+ip rule add iif "$WAN_IF" table "$TABLE_NAME" 2>/dev/null || true
+
 ip route flush cache 2>/dev/null || true
 
 iptables -t nat -N "$NAT_CHAIN" 2>/dev/null || true
@@ -114,6 +104,7 @@ iptables -t nat -F "$NAT_CHAIN" 2>/dev/null || true
 if [ "$NAT" = "true" ]; then
   iptables -t nat -C POSTROUTING -j "$NAT_CHAIN" 2>/dev/null || \
     iptables -t nat -A POSTROUTING -j "$NAT_CHAIN" 2>/dev/null || true
+
   for NET in "${LANS[@]}"; do
     iptables -t nat -A "$NAT_CHAIN" -s "$NET" -o "$WAN_IF" -j MASQUERADE 2>/dev/null || true
   done
@@ -128,5 +119,5 @@ iptables -C FORWARD -i "$WAN_IF" -o "$VTI_IF" -m state --state RELATED,ESTABLISH
   iptables -A FORWARD -i "$WAN_IF" -o "$VTI_IF" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
 
 echo "[vti-up] done."
-log "Boghche route engine applied mode=$MODE left=$LEFT right=$RIGHT if=$VTI_IF table=${TABLE_ID}/${TABLE_NAME} lans=${LANS[*]}"
+log "Boghche legacy VTI engine applied left=$LEFT right=$RIGHT if=$VTI_IF table=${TABLE_ID}/${TABLE_NAME}"
 exit 0
