@@ -5,6 +5,7 @@ source /usr/local/lib/boghche/utils.sh
 
 CONFIG="/etc/boghche/config.json"
 IPSEC_GENERATOR="/usr/local/lib/boghche/ipsec.sh"
+UNBOUND_GENERATOR="/usr/local/lib/boghche/unbound.sh"
 TABLE_ID=200
 TABLE_NAME=vti
 NAT_CHAIN="BOGHCHE-POSTROUTING"
@@ -60,8 +61,6 @@ else
 fi
 sleep 3
 
-# Legacy iptables mangle MARK rules break marked VTI/XFRM template matching on some hosts.
-# The old working VPS had no legacy mangle MARK rules, so keep that table clean before VTI setup.
 if command -v iptables-legacy >/dev/null 2>&1; then
   iptables-legacy -t mangle -F PREROUTING 2>/dev/null || true
   iptables-legacy -t mangle -F OUTPUT 2>/dev/null || true
@@ -124,6 +123,10 @@ iptables -C FORWARD -i "$VTI_IF" -o "$WAN_IF" -j ACCEPT 2>/dev/null || \
 
 iptables -C FORWARD -i "$WAN_IF" -o "$VTI_IF" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || \
   iptables -A FORWARD -i "$WAN_IF" -o "$VTI_IF" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
+
+if [ -x "$UNBOUND_GENERATOR" ]; then
+  "$UNBOUND_GENERATOR" || true
+fi
 
 echo "[vti-up] done."
 log "Boghche legacy VTI engine applied left=$LEFT right=$RIGHT if=$VTI_IF table=${TABLE_ID}/${TABLE_NAME}"
