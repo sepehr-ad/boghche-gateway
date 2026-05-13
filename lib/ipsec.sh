@@ -50,11 +50,11 @@ conn ${CONN_NAME}
 
     left=${LEFT}
     leftid=${LEFTID}
-    leftsubnet=${LOCAL_SUBNET}
+    leftsubnet=0.0.0.0/0
 
     right=${RIGHT}
     rightid=${RIGHTID}
-    rightsubnet=${REMOTE_SUBNET}
+    rightsubnet=0.0.0.0/0
 
     ike=${IKE}
     esp=${ESP}
