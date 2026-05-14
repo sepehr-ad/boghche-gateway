@@ -50,6 +50,8 @@ install_packages() {
     libcharon-extra-plugins \
     iproute2 \
     iptables \
+    nftables \
+    conntrack \
     jq \
     curl \
     git \
@@ -125,12 +127,16 @@ install_files() {
     /usr/local/lib/boghche \
     /etc/boghche \
     /etc/unbound/unbound.conf.d \
-    /var/log/boghche
+    /var/log/boghche \
+    /var/lib/boghche/stats/current \
+    /var/lib/boghche/stats/daily \
+    /var/lib/boghche/stats/state
 
   curl -fsSL "$REPO/lib/engine.sh" -o /usr/local/lib/boghche/engine.sh
   curl -fsSL "$REPO/lib/utils.sh" -o /usr/local/lib/boghche/utils.sh
   curl -fsSL "$REPO/lib/ipsec.sh" -o /usr/local/lib/boghche/ipsec.sh
   curl -fsSL "$REPO/lib/unbound.sh" -o /usr/local/lib/boghche/unbound.sh
+  curl -fsSL "$REPO/lib/metrics.sh" -o /usr/local/lib/boghche/metrics.sh
   curl -fsSL "$REPO/bin/boghche" -o /usr/local/bin/boghche
   curl -fsSL "$REPO/systemd/boghche.service" -o /etc/systemd/system/boghche.service || true
 
@@ -153,6 +159,7 @@ validate_install() {
   command -v ipsec >/dev/null
   command -v unbound >/dev/null
   command -v tcpdump >/dev/null
+  command -v conntrack >/dev/null
 
   echo "[✓] Validation successful"
 }
@@ -175,6 +182,7 @@ main() {
   echo "  mtu=1480"
   echo "  vti_addr"
   echo "  vti_remote"
+  echo "Traffic analytics storage is capped at 2GB"
   echo "Run: sudo boghche"
 }
 
