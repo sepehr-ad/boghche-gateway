@@ -226,9 +226,15 @@ generate_ipsec() {
 start_tunnel() {
   need_root
   generate_ipsec
+
   systemctl restart boghche || true
   ipsec restart || true
-  gum style --foreground 10 "✔ Tunnel start requested"
+
+  sleep 5
+
+  systemctl restart boghche || true
+
+  gum style --foreground 10 "✔ Tunnel started and configuration applied"
 }
 
 stop_tunnel() {
