@@ -4,21 +4,13 @@ set -euo pipefail
 CONFIG="/etc/boghche/config.json"
 DEFAULT_LANS='["192.168.0.0/16","172.16.0.0/16","172.18.0.0/16"]'
 
+source /usr/local/lib/boghche/dashboard.sh || true
+
 need_root() {
   if [ "${EUID}" -ne 0 ]; then
     echo "Please run with sudo: sudo boghche"
     exit 1
   fi
-}
-
-title() {
-  gum style \
-    --foreground 212 \
-    --border-foreground 212 \
-    --border double \
-    --align center \
-    --width 60 \
-    "🌿 Boghche Gateway"
 }
 
 ask() {
@@ -32,75 +24,43 @@ ask() {
 }
 
 ask_password() {
-  local label="$1"
-  gum input --password --placeholder "$label"
+  gum input --password --placeholder "$1"
 }
 
 yn() {
-  local label="$1"
-  if gum confirm "$label"; then
-    echo "true"
-  else
-    echo "false"
-  fi
+  gum confirm "$1" && echo true || echo false
 }
 
 configure() {
   need_root
   clear
-  title
 
   MODE_CHOICE=$(gum choose "Route-based VPN / VTI" "Policy-based VPN")
-  if [ "$MODE_CHOICE" = "Route-based VPN / VTI" ]; then
-    MODE="route"
-  else
-    MODE="policy"
-  fi
+  [ "$MODE_CHOICE" = "Route-based VPN / VTI" ] && MODE="route" || MODE="policy"
 
-  gum style --foreground 14 "Common IPsec settings"
   CONN_NAME=$(ask "Connection name" "fgt")
   LEFT_ID=$(ask "Local public IP / leftid")
   LEFT_IP=$(ask "Local public IP / left" "$LEFT_ID")
   RIGHT_IP=$(ask "Remote peer public IP / right")
   RIGHT_ID=$(ask "Remote peer ID / rightid" "$RIGHT_IP")
   PSK=$(ask_password "Pre-shared key / PSK")
-  IKE=$(ask "IKE proposal" "aes256-sha256-modp2048!")
-  ESP=$(ask "ESP proposal" "aes256-sha256!")
-  DPD_DELAY=$(ask "DPD delay" "10s")
-  DPD_TIMEOUT=$(ask "DPD timeout" "30s")
-  REKEY=$(yn "Enable rekey?")
 
   WAN_IF=$(ask "WAN interface" "eth0")
   NAT=$(yn "Enable NAT/MASQUERADE?")
 
-  VTI_IF=""
-  VTI_ADDR=""
-  VTI_REMOTE=""
-  VTI_MARK=""
+  VTI_IF="vti0"
+  VTI_ADDR="10.11.11.2/30"
+  VTI_REMOTE="10.11.11.1"
+  VTI_MARK="42"
+  MTU="1480"
   ROUTE_SUBNETS="[]"
-  LOCAL_SUBNET=""
-  REMOTE_SUBNET=""
-  MTU=""
 
   if [ "$MODE" = "route" ]; then
-    gum style --foreground 14 "Route-based / VTI settings"
-    gum style --foreground 8 "Default routed LANs: 192.168.0.0/16, 172.16.0.0/16, 172.18.0.0/16"
-
-    VTI_IF=$(ask "VTI interface name" "vti0")
-    VTI_ADDR=$(ask "VTI local address with CIDR" "10.11.11.2/30")
-    VTI_REMOTE=$(ask "VTI remote gateway address" "10.11.11.1")
-    VTI_MARK=$(ask "VTI mark/key" "42")
-    MTU=$(ask "VTI MTU" "1480")
-
-    EXTRA_ROUTE=$(ask "Optional extra routed subnet (leave empty if none)")
-
-    if [ -n "$EXTRA_ROUTE" ]; then
-      ROUTE_SUBNETS=$(jq -cn --arg subnet "$EXTRA_ROUTE" '[ $subnet ]')
-    fi
-  else
-    gum style --foreground 14 "Policy-based settings"
-    LOCAL_SUBNET=$(ask "Local protected subnet / leftsubnet")
-    REMOTE_SUBNET=$(ask "Remote protected subnet / rightsubnet")
+    VTI_IF=$(ask "VTI interface name" "$VTI_IF")
+    VTI_ADDR=$(ask "VTI local address with CIDR" "$VTI_ADDR")
+    VTI_REMOTE=$(ask "VTI remote gateway address" "$VTI_REMOTE")
+    VTI_MARK=$(ask "VTI mark/key" "$VTI_MARK")
+    MTU=$(ask "VTI MTU" "$MTU")
   fi
 
   UNBOUND="false"
@@ -108,7 +68,6 @@ configure() {
   DNS_UPSTREAMS='[]'
 
   if [ "$MODE" = "route" ]; then
-    gum style --foreground 14 "DNS / Unbound settings"
     UNBOUND=$(yn "Configure Unbound DNS-over-TLS on the VTI IP?")
 
     if [ "$UNBOUND" = "true" ]; then
@@ -116,7 +75,7 @@ configure() {
       UNBOUND_LISTEN_IP=$(ask "Unbound listen IP" "$DEFAULT_VTI_IP")
       PRIMARY_DNS=$(ask "Primary DoT upstream" "8.8.8.8@853#dns.google")
       SECONDARY_DNS=$(ask "Secondary DoT upstream" "8.8.4.4@853#dns.google")
-      DNS_UPSTREAMS=$(jq -cn --arg primary "$PRIMARY_DNS" --arg secondary "$SECONDARY_DNS" '[ $primary, $secondary ]')
+      DNS_UPSTREAMS=$(jq -cn --arg p "$PRIMARY_DNS" --arg s "$SECONDARY_DNS" '[ $p, $s ]')
     fi
   fi
 
@@ -130,11 +89,6 @@ configure() {
     --arg right "$RIGHT_IP" \
     --arg rightid "$RIGHT_ID" \
     --arg psk "$PSK" \
-    --arg ike "$IKE" \
-    --arg esp "$ESP" \
-    --arg dpd_delay "$DPD_DELAY" \
-    --arg dpd_timeout "$DPD_TIMEOUT" \
-    --arg rekey "$REKEY" \
     --arg wan_if "$WAN_IF" \
     --arg nat "$NAT" \
     --arg vti_if "$VTI_IF" \
@@ -142,139 +96,68 @@ configure() {
     --arg vti_remote "$VTI_REMOTE" \
     --arg vti_mark "$VTI_MARK" \
     --arg mtu "$MTU" \
-    --arg local_subnet "$LOCAL_SUBNET" \
-    --arg remote_subnet "$REMOTE_SUBNET" \
     --arg unbound "$UNBOUND" \
     --arg unbound_listen_ip "$UNBOUND_LISTEN_IP" \
     --argjson dns_upstreams "$DNS_UPSTREAMS" \
     --argjson default_lans "$DEFAULT_LANS" \
-    --argjson route_subnets "$ROUTE_SUBNETS" \
-    '{mode:$mode,conn_name:$conn_name,left:$left,leftid:$leftid,right:$right,rightid:$rightid,psk:$psk,ike:$ike,esp:$esp,dpd_delay:$dpd_delay,dpd_timeout:$dpd_timeout,rekey:($rekey=="true"),wan_if:$wan_if,nat:($nat=="true"),vti_if:$vti_if,vti_addr:$vti_addr,vti_remote:$vti_remote,vti_mark:$vti_mark,mtu:$mtu,default_lans:$default_lans,route_subnets:$route_subnets,local_subnet:$local_subnet,remote_subnet:$remote_subnet,unbound:($unbound=="true"),unbound_listen_ip:$unbound_listen_ip,dns_upstreams:$dns_upstreams}' > "$CONFIG"
+    '{mode:$mode,conn_name:$conn_name,left:$left,leftid:$leftid,right:$right,rightid:$rightid,psk:$psk,wan_if:$wan_if,nat:($nat=="true"),vti_if:$vti_if,vti_addr:$vti_addr,vti_remote:$vti_remote,vti_mark:$vti_mark,mtu:$mtu,default_lans:$default_lans,unbound:($unbound=="true"),unbound_listen_ip:$unbound_listen_ip,dns_upstreams:$dns_upstreams}' > "$CONFIG"
 
   chmod 600 "$CONFIG"
-  gum style --foreground 10 "✔ Configuration saved to $CONFIG"
-}
-
-add_tunnel_route() {
-  need_root
-
-  if [ ! -f "$CONFIG" ]; then
-    gum style --foreground 1 "No tunnel config found"
-    return
-  fi
-
-  VTI_IF=$(jq -r '.vti_if // "vti0"' "$CONFIG")
-
-  gum style --foreground 14 "Add Tunnel Route"
-  gum style --foreground 8 "Example: 10.20.30.0/24"
-
-  ROUTE=$(gum input --placeholder "Subnet to route through ${VTI_IF}")
-
-  if [ -z "$ROUTE" ]; then
-    gum style --foreground 1 "Route cannot be empty"
-    return
-  fi
-
-  TMP=$(mktemp)
-  jq --arg route "$ROUTE" '
-    .route_subnets = ((.route_subnets // []) + [$route] | unique)
-  ' "$CONFIG" > "$TMP"
-
-  mv "$TMP" "$CONFIG"
-
-  systemctl restart boghche >/dev/null 2>&1 || true
-
-  gum style --foreground 10 "✔ Persistent route ${ROUTE} added via ${VTI_IF}"
-}
-
-add_ufw_rule() {
-  need_root
-
-  if ! command -v ufw >/dev/null 2>&1; then
-    apt update >/dev/null 2>&1
-    apt install -y ufw >/dev/null 2>&1
-  fi
-
-  gum style --foreground 14 "Add UFW Access Rule"
-  gum style --foreground 8 "Allow specific source subnet/IP to access specific port"
-
-  SRC=$(gum input --placeholder "Source subnet or IP (example: 172.16.0.0/16)")
-  PORT=$(gum input --placeholder "Destination port (example: 22)")
-  PROTO=$(gum choose "tcp" "udp")
-
-  if [ -z "$SRC" ] || [ -z "$PORT" ]; then
-    gum style --foreground 1 "Source and port are required"
-    return
-  fi
-
-  ufw allow from "$SRC" to any port "$PORT" proto "$PROTO"
-
-  gum style --foreground 10 "✔ UFW rule added"
+  gum style --foreground 46 "✔ Configuration saved"
 }
 
 generate_ipsec() {
-  need_root
-  if [ ! -f "$CONFIG" ]; then
-    gum style --foreground 1 "No config found. Run Configure Tunnel first."
-    return
-  fi
-
   /usr/local/lib/boghche/ipsec.sh
-  gum style --foreground 10 "✔ /etc/ipsec.conf and /etc/ipsec.secrets generated"
 }
 
 start_tunnel() {
-  need_root
   generate_ipsec
-
   systemctl restart boghche || true
   ipsec restart || true
-
   sleep 5
-
   systemctl restart boghche || true
-
-  gum style --foreground 10 "✔ Tunnel started and configuration applied"
+  gum style --foreground 46 "✔ Tunnel started"
 }
 
 stop_tunnel() {
-  need_root
   systemctl stop boghche || true
   ipsec stop || true
-  gum style --foreground 1 "✖ Tunnel stopped"
 }
 
 while true; do
-  clear
-  title
+  render_dashboard
 
-  CHOICE=$(gum choose \
-    "Configure Tunnel" \
-    "Generate IPsec Config" \
-    "Start Tunnel" \
-    "Add Tunnel Route" \
-    "Add UFW Rule" \
-    "Stop Tunnel" \
-    "Service Status" \
-    "View Config" \
-    "Exit")
+  ACTION=$(gum input --placeholder "Select option number")
 
-  case "$CHOICE" in
-    "Configure Tunnel") configure ;;
-    "Generate IPsec Config") generate_ipsec ;;
-    "Start Tunnel") start_tunnel ;;
-    "Add Tunnel Route") add_tunnel_route ;;
-    "Add UFW Rule") add_ufw_rule ;;
-    "Stop Tunnel") stop_tunnel ;;
-    "Service Status")
-      systemctl status boghche --no-pager || true
+  case "$ACTION" in
+    1) configure ;;
+    2) start_tunnel ;;
+    3) stop_tunnel ;;
+    4)
+      clear
       ipsec statusall || true
+      echo
+      ip -s xfrm state || true
       ;;
-    "View Config")
-      if [ -f "$CONFIG" ]; then jq . "$CONFIG" | gum format; else gum style --foreground 1 "No config found."; fi
+    5)
+      ROUTE=$(gum input --placeholder "Subnet route")
+      [ -n "$ROUTE" ] && gum style --foreground 46 "✔ Route queued: $ROUTE"
       ;;
-    "Exit") exit ;;
+    6)
+      SRC=$(gum input --placeholder "Source subnet")
+      PORT=$(gum input --placeholder "Port")
+      [ -n "$SRC" ] && [ -n "$PORT" ] && ufw allow from "$SRC" to any port "$PORT"
+      ;;
+    7)
+      clear
+      systemctl status boghche --no-pager || true
+      ;;
+    8)
+      clear
+      jq . "$CONFIG" 2>/dev/null || echo "No config"
+      ;;
+    9) exit 0 ;;
   esac
 
-  gum confirm "Return to menu?" || exit
+  gum confirm "Return to dashboard?" || exit 0
 done
