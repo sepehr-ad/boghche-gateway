@@ -13,6 +13,8 @@ NOW="$(date -u +%FT%TZ)"
 
 mkdir -p "$STATE_DIR" "$CURRENT_DIR" "$DAILY_DIR"
 
+touch "${DAILY_DIR}/${TODAY}.tsv" 2>/dev/null || true
+
 lan_regex() {
   if [ -f "$CONFIG" ]; then
     jq -r '([
@@ -25,17 +27,17 @@ lan_regex() {
   else
     printf '%s\n' "10.11.11.0/30" "10.20.30.0/30" "192.168.0.0/16" "172.16.0.0/16" "172.18.0.0/16"
   fi | awk '
-    function esc(s){gsub(/\./,"\\.",s); return s}
-    /\/16$/ {split($0,a,"."); print "^" a[1] "\\." a[2] "\\."; next}
-    /\/24$/ {split($0,a,"."); print "^" a[1] "\\." a[2] "\\." a[3] "\\."; next}
-    /\/30$/ {split($0,a,"."); print "^" a[1] "\\." a[2] "\\." a[3] "\\.(" a[4] "|" a[4]+1 "|" a[4]+2 "|" a[4]+3 ")$"; next}
+    function esc(s){gsub(/\./,"\\\\.",s); return s}
+    /\/16$/ {split($0,a,"."); print "^" a[1] "\\\\." a[2] "\\\\."; next}
+    /\/24$/ {split($0,a,"."); print "^" a[1] "\\\\." a[2] "\\\\." a[3] "\\\\."; next}
+    /\/30$/ {split($0,a,"."); print "^" a[1] "\\\\." a[2] "\\\\." a[3] "\\\\.(" a[4] "|" a[4]+1 "|" a[4]+2 "|" a[4]+3 ")$"; next}
     /\/32$/ {sub(/\/32$/,""); print "^" esc($0) "$"; next}
     /^[0-9]+\./ {print "^" esc($0) "$"}
   ' | paste -sd'|' -
 }
 
 prune_storage() {
-  local size_mb
+  local size_mb oldest
   size_mb=$(du -sm "$BASE_DIR" 2>/dev/null | awk '{print $1}')
   while [ "${size_mb:-0}" -gt "$MAX_MB" ]; do
     oldest=$(find "$DAILY_DIR" "$CURRENT_DIR" "$STATE_DIR" -type f -printf '%T@ %p\n' 2>/dev/null | sort -n | head -n1 | cut -d' ' -f2- || true)
@@ -46,6 +48,9 @@ prune_storage() {
 }
 
 collect_conntrack() {
+  mkdir -p "$STATE_DIR" "$CURRENT_DIR" "$DAILY_DIR"
+  touch "${DAILY_DIR}/${TODAY}.tsv" 2>/dev/null || true
+
   command -v conntrack >/dev/null 2>&1 || {
     cat > "${CURRENT_DIR}/top_ips.json" <<EOF
 {"updated_at":"${NOW}","source":"conntrack","error":"conntrack command not found","top_ips":[]}
@@ -81,15 +86,19 @@ EOF
     }
   ' | sort > "$new_file"
 
-  awk '
-    BEGIN {FS=OFS="\t"}
-    NR==FNR {prev[$1]=$3; next}
-    {
-      d=$3 - prev[$1]
-      if (d < 0) d=$3
-      if (d > 0) print $2,d
-    }
-  ' "$prev_file" "$new_file" 2>/dev/null > "$delta_file" || cp /dev/null "$delta_file"
+  if [ -f "$prev_file" ]; then
+    awk '
+      BEGIN {FS=OFS="\t"}
+      NR==FNR {prev[$1]=$3; next}
+      {
+        d=$3 - prev[$1]
+        if (d < 0) d=$3
+        if (d > 0) print $2,d
+      }
+    ' "$prev_file" "$new_file" > "$delta_file" 2>/dev/null || true
+  else
+    cp /dev/null "$delta_file"
+  fi
 
   if [ -s "$delta_file" ]; then
     awk 'BEGIN{FS=OFS="\t"} {sum[$1]+=$2} END{for (ip in sum) print ip,sum[ip]}' "$delta_file" >> "$daily_file"
@@ -97,39 +106,30 @@ EOF
 
   cp "$new_file" "$prev_file"
 
-  awk -v updated="$NOW" -v n="$TOP_N" '
-    BEGIN {FS=OFS="\t"}
-    {sum[$1]+=$2}
-    END {
-      print "{\"updated_at\":\"" updated "\",\"source\":\"conntrack_delta\",\"top_ips\":["
-      for (ip in sum) print sum[ip] "\t" ip | "sort -nr | head -n " n
-    }
-  ' "$daily_file" > "${STATE_DIR}/top.raw"
-
-  awk '
-    BEGIN {first=1}
-    /^[0-9]/ {
-      bytes=$1; ip=$2
-      if (!first) printf ","
-      printf "{\"ip\":\"%s\",\"bytes\":%s}", ip, bytes
-      first=0
-    }
-    END {print "]}"}
-  ' "${STATE_DIR}/top.raw" >> "${STATE_DIR}/top.raw"
-
-  # Rebuild JSON safely from sorted top rows.
   {
     printf '{"updated_at":"%s","source":"conntrack_delta","top_ips":[' "$NOW"
-    awk 'NR==1{next} /^[0-9]/ {if (c++) printf ","; printf "{\"ip\":\"%s\",\"bytes\":%s}", $2, $1}' "${STATE_DIR}/top.raw"
+    awk '
+      BEGIN{FS=OFS="\t"}
+      {sum[$1]+=$2}
+      END {
+        for (ip in sum) print sum[ip],ip
+      }
+    ' "$daily_file" | sort -nr | head -n "$TOP_N" | awk '
+      BEGIN{first=1}
+      {
+        if (!first) printf ","
+        printf "{\"ip\":\"%s\",\"bytes\":%s}", $2, $1
+        first=0
+      }
+    '
     printf ']}'
   } > "$top_file"
 }
 
 show_top() {
   local file="${CURRENT_DIR}/top_ips.json"
-  if [ ! -f "$file" ]; then
-    collect_conntrack
-  fi
+  [ -f "$file" ] || collect_conntrack
+
   jq -r '.top_ips[]? | "\(.ip)\t\(.bytes)"' "$file" 2>/dev/null | awk '
     function human(x){
       if (x>=1073741824) return sprintf("%.2f GB", x/1073741824)
