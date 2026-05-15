@@ -13,7 +13,6 @@ require_root() {
 
 check_os() {
   source /etc/os-release
-
   if [[ "$ID" != "ubuntu" && "$ID" != "debian" ]]; then
     echo "Unsupported OS: $ID"
     exit 1
@@ -22,45 +21,20 @@ check_os() {
 
 detect_arch() {
   ARCH=$(uname -m)
-
   case "$ARCH" in
-    x86_64)
-      GUM_ARCH="x86_64"
-      ;;
-    aarch64|arm64)
-      GUM_ARCH="arm64"
-      ;;
-    *)
-      echo "Unsupported architecture: $ARCH"
-      exit 1
-      ;;
+    x86_64) GUM_ARCH="x86_64" ;;
+    aarch64|arm64) GUM_ARCH="arm64" ;;
+    *) echo "Unsupported architecture: $ARCH"; exit 1 ;;
   esac
 }
 
 install_packages() {
   export DEBIAN_FRONTEND=noninteractive
-
   apt update
-
   apt install -y \
-    strongswan \
-    strongswan-starter \
-    strongswan-libcharon \
-    strongswan-pki \
-    libcharon-extra-plugins \
-    iproute2 \
-    iptables \
-    nftables \
-    conntrack \
-    jq \
-    curl \
-    git \
-    tcpdump \
-    unbound \
-    ufw \
-    ca-certificates \
-    tar \
-    gzip
+    strongswan strongswan-starter strongswan-libcharon strongswan-pki \
+    libcharon-extra-plugins iproute2 iptables nftables conntrack jq curl git \
+    tcpdump unbound ufw ca-certificates tar gzip dnsutils
 }
 
 configure_kernel() {
@@ -86,37 +60,18 @@ install_gum() {
     return
   fi
 
-  echo "[+] Installing gum..."
-
   TMP_DIR=$(mktemp -d)
   VERSION="0.14.0"
 
   case "$GUM_ARCH" in
-    x86_64)
-      GUM_FILE="gum_${VERSION}_Linux_x86_64.tar.gz"
-      ;;
-    arm64)
-      GUM_FILE="gum_${VERSION}_Linux_arm64.tar.gz"
-      ;;
+    x86_64) GUM_FILE="gum_${VERSION}_Linux_x86_64.tar.gz" ;;
+    arm64) GUM_FILE="gum_${VERSION}_Linux_arm64.tar.gz" ;;
   esac
 
-  URL="https://github.com/charmbracelet/gum/releases/download/v${VERSION}/${GUM_FILE}"
-
-  echo "[+] Downloading ${GUM_FILE}"
-
-  curl -fL "$URL" -o ${TMP_DIR}/gum.tar.gz
-
+  curl -fL "https://github.com/charmbracelet/gum/releases/download/v${VERSION}/${GUM_FILE}" -o ${TMP_DIR}/gum.tar.gz
   tar -xzf ${TMP_DIR}/gum.tar.gz -C ${TMP_DIR}
-
   GUM_BIN=$(find ${TMP_DIR} -type f -name gum | head -n 1)
-
-  if [ -z "$GUM_BIN" ]; then
-    echo "gum binary not found"
-    exit 1
-  fi
-
   install "$GUM_BIN" /usr/local/bin/gum
-
   rm -rf ${TMP_DIR}
 
   echo "[✓] gum installed"
@@ -124,7 +79,8 @@ install_gum() {
 
 install_files() {
   mkdir -p \
-    /usr/local/lib/boghche \
+    /usr/local/lib/boghche/services \
+    /etc/boghche/rules \
     /etc/boghche \
     /etc/unbound/unbound.conf.d \
     /var/log/boghche \
@@ -138,16 +94,22 @@ install_files() {
   curl -fsSL "$REPO/lib/unbound.sh" -o /usr/local/lib/boghche/unbound.sh
   curl -fsSL "$REPO/lib/metrics.sh" -o /usr/local/lib/boghche/metrics.sh
   curl -fsSL "$REPO/lib/dashboard.sh" -o /usr/local/lib/boghche/dashboard.sh
+
+  curl -fsSL "$REPO/lib/services/firewall_service.sh" -o /usr/local/lib/boghche/services/firewall_service.sh
+  curl -fsSL "$REPO/lib/services/dns_service.sh" -o /usr/local/lib/boghche/services/dns_service.sh
+  curl -fsSL "$REPO/lib/services/monitor_service.sh" -o /usr/local/lib/boghche/services/monitor_service.sh
+  curl -fsSL "$REPO/lib/services/maintenance_service.sh" -o /usr/local/lib/boghche/services/maintenance_service.sh
+
   curl -fsSL "$REPO/bin/boghche" -o /usr/local/bin/boghche
   curl -fsSL "$REPO/systemd/boghche.service" -o /etc/systemd/system/boghche.service || true
 
   chmod +x /usr/local/lib/boghche/*.sh || true
+  chmod +x /usr/local/lib/boghche/services/*.sh || true
   chmod +x /usr/local/bin/boghche
 }
 
 configure_systemd() {
   systemctl daemon-reload
-
   systemctl enable strongswan-starter || true
   systemctl enable unbound || true
   systemctl enable boghche.service || true
@@ -162,12 +124,16 @@ validate_install() {
   command -v tcpdump >/dev/null
   command -v conntrack >/dev/null
 
-  echo "[✓] Validation successful"
+  [ -f /usr/local/lib/boghche/services/firewall_service.sh ]
+  [ -f /usr/local/lib/boghche/services/dns_service.sh ]
+  [ -f /usr/local/lib/boghche/services/monitor_service.sh ]
+  [ -f /usr/local/lib/boghche/services/maintenance_service.sh ]
+
+  echo "[✓] Modular appliance services installed"
 }
 
 main() {
-  echo "[+] Installing Boghche Gateway..."
-
+  echo "[+] Installing Boghche Gateway Appliance..."
   require_root
   check_os
   detect_arch
@@ -179,11 +145,8 @@ main() {
   validate_install
 
   echo "[✓] Installation complete"
-  echo "Recommended route-mode defaults:"
-  echo "  mtu=1480"
-  echo "  vti_addr"
-  echo "  vti_remote"
-  echo "Traffic analytics storage is capped at 2GB"
+  echo "Workflow-oriented appliance services installed"
+  echo "Traffic analytics storage capped at 2GB"
   echo "Run: sudo boghche"
 }
 
