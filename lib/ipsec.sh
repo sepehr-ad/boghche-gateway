@@ -21,8 +21,14 @@ IKE=$(jq -r '.ike // "aes256-sha256-modp2048!"' "$CONFIG")
 ESP=$(jq -r '.esp // "aes256-sha256!"' "$CONFIG")
 DPD_DELAY=$(jq -r '.dpd_delay // "10s"' "$CONFIG")
 DPD_TIMEOUT=$(jq -r '.dpd_timeout // "30s"' "$CONFIG")
+DPD_ACTION=$(jq -r '.dpd_action // "restart"' "$CONFIG")
+CLOSE_ACTION=$(jq -r '.close_action // "restart"' "$CONFIG")
+KEYINGTRIES=$(jq -r '.keyingtries // "%forever"' "$CONFIG")
 REKEY=$(jq -r '.rekey // false' "$CONFIG")
-VTI_MARK=$(jq -r '.vti_mark // "42"' "$CONFIG")
+IKE_LIFETIME=$(jq -r '.ikelifetime // "8h"' "$CONFIG")
+LIFETIME=$(jq -r '.lifetime // "1h"' "$CONFIG")
+MARGINTIME=$(jq -r '.margintime // "9m"' "$CONFIG")
+VTI_MARK=$(jq -r '.vti_mark // .mark // "42"' "$CONFIG")
 LOCAL_SUBNET=$(jq -r '.local_subnet // empty' "$CONFIG")
 REMOTE_SUBNET=$(jq -r '.remote_subnet // empty' "$CONFIG")
 
@@ -63,13 +69,19 @@ conn ${CONN_NAME}
 
     dpddelay=${DPD_DELAY}
     dpdtimeout=${DPD_TIMEOUT}
-    dpdaction=restart
+    dpdaction=${DPD_ACTION}
+    closeaction=${CLOSE_ACTION}
+    keyingtries=${KEYINGTRIES}
+
+    ikelifetime=${IKE_LIFETIME}
+    lifetime=${LIFETIME}
+    margintime=${MARGINTIME}
 
     rekey=${REKEY_VALUE}
     reauth=no
+    mobike=no
+    installpolicy=yes
 EOF
-
-
 
 cat > "$IPSEC_SECRETS" <<EOF
 ${LEFTID} ${RIGHTID} : PSK "${PSK}"
