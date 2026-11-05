@@ -4,13 +4,15 @@ set -euo pipefail
 CONFIG="/etc/boghche/config.json"
 IPSEC_CONF="/etc/ipsec.conf"
 IPSEC_SECRETS="/etc/ipsec.secrets"
+STRONGSWAN_ROUTE_CONF="/etc/strongswan.d/90-boghche-vti.conf"
+STRONGSWAN_CONNMARK_CONF="/etc/strongswan.d/charon/99-boghche-vti-connmark.conf"
 
 if [ ! -f "$CONFIG" ]; then
   echo "Config file not found: $CONFIG"
   exit 1
 fi
 
-MODE=$(jq -r '.mode // empty' "$CONFIG")
+MODE=$(jq -r '.mode // "route"' "$CONFIG")
 CONN_NAME=$(jq -r '.conn_name // "fgt"' "$CONFIG")
 LEFT=$(jq -r '.left // empty' "$CONFIG")
 LEFTID=$(jq -r '.leftid // .left // empty' "$CONFIG")
@@ -32,6 +34,30 @@ VTI_MARK=$(jq -r '.vti_mark // .mark // "42"' "$CONFIG")
 LOCAL_SUBNET=$(jq -r '.local_subnet // empty' "$CONFIG")
 REMOTE_SUBNET=$(jq -r '.remote_subnet // empty' "$CONFIG")
 
+configure_strongswan_mode() {
+  if [ "$MODE" = "route" ]; then
+    mkdir -p /etc/strongswan.d/charon
+
+    cat > "$STRONGSWAN_ROUTE_CONF" <<'EOF'
+# Managed by Boghche Gateway for route-based/VTI mode.
+# VTI routing is managed explicitly by Boghche, not by charon table 220.
+charon {
+    install_routes = no
+}
+EOF
+
+    cat > "$STRONGSWAN_CONNMARK_CONF" <<'EOF'
+# Managed by Boghche Gateway for route-based/VTI mode.
+# The connmark plugin may interfere with mark-based VTI/XFRM processing.
+connmark {
+    load = no
+}
+EOF
+  else
+    rm -f "$STRONGSWAN_ROUTE_CONF" "$STRONGSWAN_CONNMARK_CONF"
+  fi
+}
+
 if [ "$REKEY" = "true" ]; then
   REKEY_VALUE="yes"
 else
@@ -42,6 +68,8 @@ if [ -z "$LEFT" ] || [ -z "$RIGHT" ] || [ -z "$LEFTID" ] || [ -z "$RIGHTID" ] ||
   echo "Missing required IPsec values in $CONFIG"
   exit 1
 fi
+
+configure_strongswan_mode
 
 cat > "$IPSEC_CONF" <<EOF
 config setup
