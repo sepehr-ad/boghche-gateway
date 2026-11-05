@@ -68,16 +68,12 @@ mapfile -t LANS < <(printf '%s\n' "${LANS[@]}" | awk 'NF' | sort -u)
 VTI_IP="${VTI_ADDR%%/*}"
 
 cleanup_strongswan_routes() {
-  # Remove only the conventional charon table-220 state when Boghche explicitly
-  # owns VTI routing and its managed install_routes=no configuration is present.
+  # Charon's default route-install rule is priority/table 220. Remove only that
+  # exact conventional rule, and only when Boghche owns VTI routing.
   if [ -f "$STRONGSWAN_ROUTE_CONF" ] &&
-     grep -Eq '^[[:space:]]*install_routes[[:space:]]*=[[:space:]]*no' "$STRONGSWAN_ROUTE_CONF"; then
-    while ip rule show | grep -Eq '^[0-9]+:[[:space:]]+from all lookup 220([[:space:]]|$)'; do
-      local pref
-      pref=$(ip rule show | awk '/from all lookup 220([[:space:]]|$)/ {gsub(":", "", $1); print $1; exit}')
-      [ -n "$pref" ] || break
-      ip rule del pref "$pref" 2>/dev/null || break
-    done
+     grep -Eq '^[[:space:]]*install_routes[[:space:]]*=[[:space:]]*no' "$STRONGSWAN_ROUTE_CONF" &&
+     ip rule show | grep -Eq '^220:[[:space:]]+from all lookup 220([[:space:]]|$)'; then
+    ip rule del pref 220 2>/dev/null || true
     ip route flush table 220 2>/dev/null || true
   fi
 }
