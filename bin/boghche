@@ -46,7 +46,7 @@ configure_tunnel() {
   WAN_IF=$(ask "WAN interface" "eth0")
   NAT=$(yn "Enable NAT/MASQUERADE?")
 
-  VTI_IF="vti0"; VTI_ADDR="10.11.11.2/30"; VTI_REMOTE="10.11.11.1"; VTI_MARK="42"; MTU="1480"
+  VTI_IF="vti0"; VTI_ADDR="10.11.11.2/30"; VTI_REMOTE="10.11.11.1"; VTI_MARK="42"; MTU="1400"
   ROUTE_SUBNETS="[]"; LOCAL_SUBNET=""; REMOTE_SUBNET=""
 
   if [ "$MODE" = "route" ]; then
@@ -90,7 +90,7 @@ configure_tunnel() {
 }
 
 generate_ipsec() { [ -f "$CONFIG" ] || { gum style --foreground 196 "No config found."; return 1; }; /usr/local/lib/boghche/ipsec.sh; }
-start_tunnel() { generate_ipsec || return 0; systemctl restart boghche || true; ipsec restart || true; sleep 5; systemctl restart boghche || true; gum style --foreground 46 "Tunnel started and configuration applied"; }
+start_tunnel() { [ -f "$CONFIG" ] || { gum style --foreground 196 "No config found."; return 0; }; systemctl restart boghche || true; gum style --foreground 46 "Tunnel started and configuration applied"; }
 stop_tunnel() { systemctl stop boghche || true; ipsec stop || true; gum style --foreground 196 "Tunnel stopped"; }
 restart_tunnel() { stop_tunnel; sleep 2; start_tunnel; }
 
