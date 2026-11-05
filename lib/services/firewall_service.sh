@@ -88,11 +88,11 @@ fw_enable_nat() {
 fw_repair_forwarding() {
   clear
   gum style --foreground 45 --bold "Repair Tunnel Forwarding"
+  [ -f "$CONFIG" ] || { gum style --foreground 196 "No config found."; return; }
+  systemctl restart boghche || true
   vti=$(jq -r '.vti_if // "vti0"' "$CONFIG" 2>/dev/null || echo vti0)
   wan=$(jq -r '.wan_if // "eth0"' "$CONFIG" 2>/dev/null || echo eth0)
-  iptables -C FORWARD -i "$vti" -o "$wan" -j ACCEPT 2>/dev/null || iptables -A FORWARD -i "$vti" -o "$wan" -j ACCEPT
-  iptables -C FORWARD -i "$wan" -o "$vti" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || iptables -A FORWARD -i "$wan" -o "$vti" -m state --state RELATED,ESTABLISHED -j ACCEPT
-  gum style --foreground 46 "Forwarding policy repaired for $vti <-> $wan"
+  gum style --foreground 46 "Boghche-managed forwarding, NAT and MSS rules refreshed for $vti <-> $wan"
 }
 
 fw_show_managed() {
