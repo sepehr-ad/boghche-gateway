@@ -59,11 +59,11 @@ if ! [[ "$TCP_MSS" =~ ^[0-9]+$ ]] || [ "$TCP_MSS" -lt 536 ] || [ "$TCP_MSS" -ge 
 fi
 
 mapfile -t CONFIG_LANS < <(
-  jq -r '.lans[]?, .route_subnets[]? // empty' "$CONFIG"
+  jq -r '(.lans[]? // empty), (.route_subnets[]? // empty)' "$CONFIG"
 )
 
 LANS=( "${DEFAULT_LANS[@]}" "${CONFIG_LANS[@]}" )
-mapfile -t LANS < <(printf '%s\n' "${LANS[@]}" | sort -u)
+mapfile -t LANS < <(printf '%s\n' "${LANS[@]}" | awk 'NF' | sort -u)
 
 VTI_IP="${VTI_ADDR%%/*}"
 
