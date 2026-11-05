@@ -9,6 +9,9 @@ UNBOUND_GENERATOR="/usr/local/lib/boghche/unbound.sh"
 TABLE_ID=200
 TABLE_NAME=vti
 NAT_CHAIN="BOGHCHE-POSTROUTING"
+MSS_CHAIN="BOGHCHE-MSS"
+FORWARD_CHAIN="BOGHCHE-FORWARD"
+STRONGSWAN_ROUTE_CONF="/etc/strongswan.d/90-boghche-vti.conf"
 DEFAULT_LANS=(
   "192.168.0.0/16"
   "172.16.0.0/16"
@@ -28,7 +31,8 @@ WAN_IF=$(jq -r '.wan_if // "eth0"' "$CONFIG")
 VTI_IF=$(jq -r '.vti_if // "vti0"' "$CONFIG")
 VTI_ADDR=$(jq -r '.vti_addr // empty' "$CONFIG")
 VTI_MARK=$(jq -r '.vti_mark // .mark // "42"' "$CONFIG")
-MTU=$(jq -r '.mtu // "1480"' "$CONFIG")
+MTU=$(jq -r '.mtu // "1400"' "$CONFIG")
+TCP_MSS=$(jq -r '.tcp_mss // empty' "$CONFIG")
 NAT=$(jq -r '.nat // false' "$CONFIG")
 
 if [ "$MODE" != "route" ]; then
@@ -41,14 +45,73 @@ if [ -z "$LEFT" ] || [ -z "$RIGHT" ] || [ -z "$VTI_ADDR" ]; then
   exit 1
 fi
 
+if ! [[ "$MTU" =~ ^[0-9]+$ ]] || [ "$MTU" -lt 576 ] || [ "$MTU" -gt 9000 ]; then
+  echo "Invalid VTI MTU: $MTU"
+  exit 1
+fi
+
+if [ -z "$TCP_MSS" ]; then
+  TCP_MSS=$((MTU - 40))
+fi
+if ! [[ "$TCP_MSS" =~ ^[0-9]+$ ]] || [ "$TCP_MSS" -lt 536 ] || [ "$TCP_MSS" -ge "$MTU" ]; then
+  echo "Invalid TCP MSS: $TCP_MSS for MTU $MTU"
+  exit 1
+fi
+
 mapfile -t CONFIG_LANS < <(
-  jq -r '.lans[]? // empty' "$CONFIG"
+  jq -r '.lans[]?, .route_subnets[]? // empty' "$CONFIG"
 )
 
 LANS=( "${DEFAULT_LANS[@]}" "${CONFIG_LANS[@]}" )
 mapfile -t LANS < <(printf '%s\n' "${LANS[@]}" | sort -u)
 
 VTI_IP="${VTI_ADDR%%/*}"
+
+cleanup_strongswan_routes() {
+  # Remove only the conventional charon table-220 state when Boghche explicitly
+  # owns VTI routing and its managed install_routes=no configuration is present.
+  if [ -f "$STRONGSWAN_ROUTE_CONF" ] &&
+     grep -Eq '^[[:space:]]*install_routes[[:space:]]*=[[:space:]]*no' "$STRONGSWAN_ROUTE_CONF"; then
+    while ip rule show | grep -Eq '^[0-9]+:[[:space:]]+from all lookup 220([[:space:]]|$)'; do
+      local pref
+      pref=$(ip rule show | awk '/from all lookup 220([[:space:]]|$)/ {gsub(":", "", $1); print $1; exit}')
+      [ -n "$pref" ] || break
+      ip rule del pref "$pref" 2>/dev/null || break
+    done
+    ip route flush table 220 2>/dev/null || true
+  fi
+}
+
+configure_mss() {
+  iptables -t mangle -N "$MSS_CHAIN" 2>/dev/null || true
+  iptables -t mangle -F "$MSS_CHAIN"
+  iptables -t mangle -C FORWARD -j "$MSS_CHAIN" 2>/dev/null || \
+    iptables -t mangle -I FORWARD 1 -j "$MSS_CHAIN"
+
+  iptables -t mangle -A "$MSS_CHAIN" -i "$VTI_IF" -p tcp --tcp-flags SYN,RST SYN \
+    -j TCPMSS --set-mss "$TCP_MSS"
+  iptables -t mangle -A "$MSS_CHAIN" -o "$VTI_IF" -p tcp --tcp-flags SYN,RST SYN \
+    -j TCPMSS --set-mss "$TCP_MSS"
+}
+
+configure_forwarding() {
+  iptables -N "$FORWARD_CHAIN" 2>/dev/null || true
+  iptables -F "$FORWARD_CHAIN"
+  iptables -C FORWARD -j "$FORWARD_CHAIN" 2>/dev/null || \
+    iptables -I FORWARD 1 -j "$FORWARD_CHAIN"
+
+  iptables -A "$FORWARD_CHAIN" -i "$VTI_IF" -o "$WAN_IF" -j ACCEPT
+  iptables -A "$FORWARD_CHAIN" -i "$WAN_IF" -o "$VTI_IF" \
+    -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+
+  # Remove exact legacy rules for the current interface pair from older releases.
+  while iptables -C FORWARD -i "$VTI_IF" -o "$WAN_IF" -j ACCEPT 2>/dev/null; do
+    iptables -D FORWARD -i "$VTI_IF" -o "$WAN_IF" -j ACCEPT 2>/dev/null || break
+  done
+  while iptables -C FORWARD -i "$WAN_IF" -o "$VTI_IF" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null; do
+    iptables -D FORWARD -i "$WAN_IF" -o "$VTI_IF" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || break
+  done
+}
 
 echo "[vti-up] starting..."
 
@@ -61,10 +124,7 @@ else
 fi
 sleep 3
 
-if command -v iptables-legacy >/dev/null 2>&1; then
-  iptables-legacy -t mangle -F PREROUTING 2>/dev/null || true
-  iptables-legacy -t mangle -F OUTPUT 2>/dev/null || true
-fi
+cleanup_strongswan_routes
 
 ip link del "$VTI_IF" 2>/dev/null || true
 ip link add "$VTI_IF" type vti local "$LEFT" remote "$RIGHT" key "$VTI_MARK"
@@ -118,16 +178,13 @@ else
   iptables -t nat -D POSTROUTING -j "$NAT_CHAIN" 2>/dev/null || true
 fi
 
-iptables -C FORWARD -i "$VTI_IF" -o "$WAN_IF" -j ACCEPT 2>/dev/null || \
-  iptables -A FORWARD -i "$VTI_IF" -o "$WAN_IF" -j ACCEPT 2>/dev/null || true
-
-iptables -C FORWARD -i "$WAN_IF" -o "$VTI_IF" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || \
-  iptables -A FORWARD -i "$WAN_IF" -o "$VTI_IF" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
+configure_mss
+configure_forwarding
 
 if [ -x "$UNBOUND_GENERATOR" ]; then
   "$UNBOUND_GENERATOR" || true
 fi
 
 echo "[vti-up] done."
-log "Boghche legacy VTI engine applied left=$LEFT right=$RIGHT if=$VTI_IF table=${TABLE_ID}/${TABLE_NAME}"
+log "Boghche VTI engine applied left=$LEFT right=$RIGHT if=$VTI_IF mtu=$MTU mss=$TCP_MSS table=${TABLE_ID}/${TABLE_NAME}"
 exit 0
