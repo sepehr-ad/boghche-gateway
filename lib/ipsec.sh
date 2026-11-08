@@ -114,6 +114,16 @@ if [ -z "$LEFT" ] || [ -z "$RIGHT" ] || [ -z "$LEFTID" ] || [ -z "$RIGHTID" ] ||
   exit 1
 fi
 
+if [ "$MODE" = "policy" ]; then
+  [ -n "$LOCAL_SUBNET" ] || { echo "Policy mode requires local_subnet"; exit 1; }
+  [ -n "$REMOTE_SUBNET" ] || { echo "Policy mode requires remote_subnet"; exit 1; }
+  LEFT_SUBNET="$LOCAL_SUBNET"
+  RIGHT_SUBNET="$REMOTE_SUBNET"
+else
+  LEFT_SUBNET="0.0.0.0/0"
+  RIGHT_SUBNET="0.0.0.0/0"
+fi
+
 configure_strongswan_mode
 
 cat > "$IPSEC_CONF" <<EOF
@@ -129,11 +139,11 @@ conn ${CONN_NAME}
 
     left=${LEFT}
     leftid=${LEFTID}
-    leftsubnet=0.0.0.0/0
+    leftsubnet=${LEFT_SUBNET}
 
     right=${RIGHT}
     rightid=${RIGHTID}
-    rightsubnet=0.0.0.0/0
+    rightsubnet=${RIGHT_SUBNET}
 
     ike=${IKE}
     esp=${ESP}
