@@ -6,7 +6,8 @@ _pause(){ echo; gum confirm "Return?" >/dev/null 2>&1 || true; }
 maintenance_health() {
   clear
   gum style --foreground 45 --bold "Gateway Health Audit"
-  local loaded vti mtu runtime_mtu mss forecast_rules
+  local loaded vti mtu runtime_mtu mss forecast_rules wan nat_enabled
+  local vti_remote remote_source nat_sources policy_count policy_sources
   echo "Tunnel service : $(systemctl is-active boghche 2>/dev/null || true)"
   echo "IPSec service  : $(systemctl is-active strongswan-starter 2>/dev/null || true)"
   echo "DNS service    : $(systemctl is-active unbound 2>/dev/null || true)"
@@ -34,6 +35,7 @@ maintenance_health() {
 
   if [ -f /etc/boghche/config.json ]; then
     vti=$(jq -r '.vti_if // "vti0"' /etc/boghche/config.json 2>/dev/null || echo vti0)
+    wan=$(jq -r '.wan_if // "eth0"' /etc/boghche/config.json 2>/dev/null || echo eth0)
     mtu=$(jq -r '.mtu // "1400"' /etc/boghche/config.json 2>/dev/null || echo 1400)
     runtime_mtu=$(cat /sys/class/net/"$vti"/mtu 2>/dev/null || echo n/a)
     mss=$(jq -r '.tcp_mss // empty' /etc/boghche/config.json 2>/dev/null || true)
@@ -52,6 +54,42 @@ maintenance_health() {
     else
       echo "MSS clamp      : MISSING"
     fi
+
+    nat_enabled=$(jq -r '.nat // false' /etc/boghche/config.json 2>/dev/null || echo false)
+    vti_remote=$(jq -r '.vti_remote // empty' /etc/boghche/config.json 2>/dev/null || true)
+    remote_source=""
+    [ -n "$vti_remote" ] && remote_source="${vti_remote%%/*}/32"
+    nat_sources=$(jq -r --arg remote "$remote_source" '
+      ((if has("nat_sources") then .nat_sources else
+        ["192.168.0.0/16","172.16.0.0/16","172.18.0.0/16","10.20.30.2/32"] +
+        (.lans // []) + (.route_subnets // []) end) +
+       (if $remote == "" then [] else [$remote] end)) | unique | length
+    ' /etc/boghche/config.json 2>/dev/null || echo 0)
+    policy_count=$(jq -r '(.firewall_policies // []) | length' /etc/boghche/config.json 2>/dev/null || echo 0)
+    policy_sources=$(jq -r '[(.firewall_policies // [])[].source] | unique | length' /etc/boghche/config.json 2>/dev/null || echo 0)
+
+    echo "NAT config     : ${nat_enabled} (${nat_sources} effective source(s))"
+    if [ "$nat_enabled" = "true" ] && iptables -t nat -C POSTROUTING -j BOGHCHE-POSTROUTING 2>/dev/null; then
+      echo "NAT chain hook : active"
+    elif [ "$nat_enabled" = "false" ]; then
+      echo "NAT chain hook : disabled by config"
+    else
+      echo "NAT chain hook : MISSING"
+    fi
+    if [ "$nat_enabled" = "true" ] && [ -n "$remote_source" ]; then
+      if iptables -t nat -C BOGHCHE-POSTROUTING -s "$remote_source" -o "$wan" -j MASQUERADE 2>/dev/null; then
+        echo "VTI peer NAT   : active (${remote_source})"
+      else
+        echo "VTI peer NAT   : MISSING (${remote_source})"
+      fi
+    fi
+    if iptables -C FORWARD -j BOGHCHE-FORWARD 2>/dev/null; then
+      echo "Firewall hook  : active"
+    else
+      echo "Firewall hook  : MISSING"
+    fi
+    echo "Firewall table : ${policy_count} policy(s), ${policy_sources} source-default block(s)"
+    echo "Policy behavior: first match; listed sources block by default; other sources allow"
   fi
 }
 

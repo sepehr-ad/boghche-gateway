@@ -119,12 +119,12 @@ Firewall becomes task-oriented.
 - Detect nft/legacy conflicts
 - Detect ESP drops
 
-## UFW Integration
+## Ordered Policy Table
 
-- Enable/disable integration
-- Add managed allow policy
-- Add managed deny policy
-- Show Boghche-managed rules only
+- Persist Source, Destination, Protocol, Port, Action and Comment in config.json
+- Evaluate rules in table order with first-match behavior
+- Apply source-scoped default deny for sources represented in the table
+- Manage only Boghche-owned chains and their exact hooks
 
 ---
 

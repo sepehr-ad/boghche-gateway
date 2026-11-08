@@ -2,7 +2,8 @@
 set -euo pipefail
 
 CONFIG="/etc/boghche/config.json"
-DEFAULT_LANS='["192.168.0.0/16","172.16.0.0/16","172.18.0.0/16"]'
+DEFAULT_LANS='["192.168.0.0/16","172.16.0.0/16","172.18.0.0/16","10.20.30.2/32"]'
+DEFAULT_NAT_SOURCES="$DEFAULT_LANS"
 DASHBOARD="/usr/local/lib/boghche/dashboard.sh"
 
 [ -f "$DASHBOARD" ] && source "$DASHBOARD" || true
@@ -33,9 +34,21 @@ ask_password() { gum input --password --placeholder "$1"; }
 yn() { gum confirm "$1" && echo true || echo false; }
 
 configure_tunnel() {
+  local saved_nat_sources saved_firewall_policies
   need_root
   clear
   gum style --foreground 45 --bold "Tunnel Configuration Wizard"
+
+  saved_nat_sources="$DEFAULT_NAT_SOURCES"
+  saved_firewall_policies='[]'
+  if [ -f "$CONFIG" ] && jq -e . "$CONFIG" >/dev/null 2>&1; then
+    saved_nat_sources=$(jq -c --argjson defaults "$DEFAULT_NAT_SOURCES" '
+      if has("nat_sources") then .nat_sources
+      else (($defaults + (.lans // []) + (.route_subnets // [])) | unique)
+      end
+    ' "$CONFIG")
+    saved_firewall_policies=$(jq -c '.firewall_policies // []' "$CONFIG")
+  fi
 
   MODE_CHOICE=$(gum choose "Route-based VPN / VTI" "Policy-based VPN")
   [ "$MODE_CHOICE" = "Route-based VPN / VTI" ] && MODE="route" || MODE="policy"
@@ -61,7 +74,6 @@ configure_tunnel() {
     VTI_IF=$(ask "VTI interface name" "$VTI_IF")
     VTI_ADDR=$(ask "VTI local address with CIDR" "$VTI_ADDR")
     VTI_REMOTE=$(ask "VTI remote gateway address" "$VTI_REMOTE")
-    VTI_MARK=$(ask "VTI mark/key" "$VTI_MARK")
     MTU=$(ask "VTI MTU" "$MTU")
     EXTRA_ROUTE=$(ask "Optional extra routed subnet, empty if none")
     [ -n "$EXTRA_ROUTE" ] && ROUTE_SUBNETS=$(jq -cn --arg subnet "$EXTRA_ROUTE" '[ $subnet ]')
@@ -92,7 +104,8 @@ configure_tunnel() {
     --arg local_subnet "$LOCAL_SUBNET" --arg remote_subnet "$REMOTE_SUBNET" \
     --arg unbound "$UNBOUND" --arg unbound_listen_ip "$UNBOUND_LISTEN_IP" \
     --argjson dns_upstreams "$DNS_UPSTREAMS" --argjson default_lans "$DEFAULT_LANS" --argjson route_subnets "$ROUTE_SUBNETS" \
-    '{mode:$mode,conn_name:$conn_name,left:$left,leftid:$leftid,right:$right,rightid:$rightid,psk:$psk,ike:$ike,esp:$esp,dpd_delay:$dpd_delay,dpd_timeout:$dpd_timeout,rekey:($rekey=="true"),wan_if:$wan_if,nat:($nat=="true"),vti_if:$vti_if,vti_addr:$vti_addr,vti_remote:$vti_remote,vti_mark:$vti_mark,mtu:$mtu,default_lans:$default_lans,route_subnets:$route_subnets,local_subnet:$local_subnet,remote_subnet:$remote_subnet,unbound:($unbound=="true"),unbound_listen_ip:$unbound_listen_ip,dns_upstreams:$dns_upstreams}' > "$CONFIG"
+    --argjson nat_sources "$saved_nat_sources" --argjson firewall_policies "$saved_firewall_policies" \
+    '{mode:$mode,conn_name:$conn_name,left:$left,leftid:$leftid,right:$right,rightid:$rightid,psk:$psk,ike:$ike,esp:$esp,dpd_delay:$dpd_delay,dpd_timeout:$dpd_timeout,rekey:($rekey=="true"),wan_if:$wan_if,nat:($nat=="true"),vti_if:$vti_if,vti_addr:$vti_addr,vti_remote:$vti_remote,vti_mark:$vti_mark,mtu:$mtu,default_lans:$default_lans,route_subnets:$route_subnets,nat_sources:$nat_sources,firewall_policies:$firewall_policies,local_subnet:$local_subnet,remote_subnet:$remote_subnet,unbound:($unbound=="true"),unbound_listen_ip:$unbound_listen_ip,dns_upstreams:$dns_upstreams}' > "$CONFIG"
   chmod 600 "$CONFIG"
   gum style --foreground 46 "Configuration saved to $CONFIG"
   echo
@@ -166,7 +179,10 @@ add_route() {
   route=$(gum input --placeholder "Subnet to route through tunnel")
   [ -z "$route" ] && return
   tmp=$(mktemp)
-  jq --arg route "$route" '.route_subnets = ((.route_subnets // []) + [$route] | unique)' "$CONFIG" > "$tmp"
+  jq --arg route "$route" --argjson defaults "$DEFAULT_NAT_SOURCES" '
+    .route_subnets = ((.route_subnets // []) + [$route] | unique) |
+    .nat_sources = (((if has("nat_sources") then .nat_sources else $defaults end) + [$route]) | unique)
+  ' "$CONFIG" > "$tmp"
   mv "$tmp" "$CONFIG"
   gum style --foreground 46 "Route added: $route"
   apply_tunnel
@@ -203,7 +219,7 @@ logs_menu() {
 }
 
 fallback_monitor_menu() { clear; ipsec statusall || true; echo; grep '^Xfrm' /proc/net/xfrm_stat || true; pause; }
-fallback_firewall_menu() { clear; iptables -vnL || true; pause; }
+fallback_firewall_menu() { clear; echo "Firewall policy module is unavailable. Reinstall Boghche to repair it."; pause; }
 fallback_dns_menu() { clear; systemctl status unbound --no-pager || true; pause; }
 fallback_maintenance_menu() { clear; jq . "$CONFIG" 2>/dev/null || echo "No config"; pause; }
 
