@@ -97,6 +97,7 @@ install_files() {
   curl -fsSL "$REPO/lib/services/dns_service.sh" -o /usr/local/lib/boghche/services/dns_service.sh
   curl -fsSL "$REPO/lib/services/monitor_service.sh" -o /usr/local/lib/boghche/services/monitor_service.sh
   curl -fsSL "$REPO/lib/services/maintenance_service.sh" -o /usr/local/lib/boghche/services/maintenance_service.sh
+  curl -fsSL "$REPO/lib/services/safety.sh" -o /usr/local/lib/boghche/services/safety.sh
 
   curl -fsSL "$REPO/bin/boghche" -o /usr/local/bin/boghche
   curl -fsSL "$REPO/systemd/boghche.service" -o /etc/systemd/system/boghche.service || true
@@ -126,6 +127,7 @@ validate_install() {
   [ -f /usr/local/lib/boghche/services/dns_service.sh ]
   [ -f /usr/local/lib/boghche/services/monitor_service.sh ]
   [ -f /usr/local/lib/boghche/services/maintenance_service.sh ]
+  [ -f /usr/local/lib/boghche/services/safety.sh ]
 
   echo "[✓] Modular appliance services installed"
 }

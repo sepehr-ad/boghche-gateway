@@ -7,6 +7,14 @@ DASHBOARD="/usr/local/lib/boghche/dashboard.sh"
 
 [ -f "$DASHBOARD" ] && source "$DASHBOARD" || true
 
+for module in \
+  /usr/local/lib/boghche/services/monitor_service.sh \
+  /usr/local/lib/boghche/services/firewall_service.sh \
+  /usr/local/lib/boghche/services/dns_service.sh \
+  /usr/local/lib/boghche/services/maintenance_service.sh; do
+  [ -f "$module" ] && source "$module"
+done
+
 need_root() {
   if [ "${EUID}" -ne 0 ]; then
     echo "Please run with sudo: sudo boghche"
@@ -87,12 +95,71 @@ configure_tunnel() {
     '{mode:$mode,conn_name:$conn_name,left:$left,leftid:$leftid,right:$right,rightid:$rightid,psk:$psk,ike:$ike,esp:$esp,dpd_delay:$dpd_delay,dpd_timeout:$dpd_timeout,rekey:($rekey=="true"),wan_if:$wan_if,nat:($nat=="true"),vti_if:$vti_if,vti_addr:$vti_addr,vti_remote:$vti_remote,vti_mark:$vti_mark,mtu:$mtu,default_lans:$default_lans,route_subnets:$route_subnets,local_subnet:$local_subnet,remote_subnet:$remote_subnet,unbound:($unbound=="true"),unbound_listen_ip:$unbound_listen_ip,dns_upstreams:$dns_upstreams}' > "$CONFIG"
   chmod 600 "$CONFIG"
   gum style --foreground 46 "Configuration saved to $CONFIG"
+  echo
+  gum style --foreground 45 "Applying tunnel configuration now..."
+  apply_tunnel
 }
 
-generate_ipsec() { [ -f "$CONFIG" ] || { gum style --foreground 196 "No config found."; return 1; }; /usr/local/lib/boghche/ipsec.sh; }
-start_tunnel() { [ -f "$CONFIG" ] || { gum style --foreground 196 "No config found."; return 0; }; systemctl restart boghche || true; gum style --foreground 46 "Tunnel started and configuration applied"; }
-stop_tunnel() { systemctl stop boghche || true; ipsec stop || true; gum style --foreground 196 "Tunnel stopped"; }
-restart_tunnel() { stop_tunnel; sleep 2; start_tunnel; }
+generate_ipsec() {
+  [ -f "$CONFIG" ] || { gum style --foreground 196 "No config found."; return 1; }
+  /usr/local/lib/boghche/ipsec.sh
+}
+
+tunnel_is_connected() {
+  ipsec statusall 2>/dev/null | grep -q 'ESTABLISHED'
+}
+
+apply_tunnel() {
+  [ -f "$CONFIG" ] || { gum style --foreground 196 "No config found. Run Configure first."; return 1; }
+
+  if ! systemctl restart boghche; then
+    gum style --foreground 196 "Failed to apply Boghche tunnel configuration."
+    journalctl -u boghche -n 30 --no-pager || true
+    return 1
+  fi
+
+  sleep 2
+  if tunnel_is_connected; then
+    gum style --foreground 46 "Tunnel configuration applied and IPsec is connected."
+  else
+    gum style --foreground 220 "Configuration applied, but IPsec is not connected yet."
+    ipsec statusall 2>/dev/null | grep -E 'Security Associations|connecting|ESTABLISHED|INSTALLED' || true
+  fi
+}
+
+start_tunnel() {
+  gum style --foreground 45 "Start / Apply Current Configuration"
+  apply_tunnel
+}
+
+stop_tunnel() {
+  systemctl stop boghche || true
+  ipsec stop || true
+  ip link del "$(jq -r '.vti_if // "vti0"' "$CONFIG" 2>/dev/null || echo vti0)" 2>/dev/null || true
+  gum style --foreground 196 "Tunnel stopped."
+}
+
+restart_tunnel() {
+  gum style --foreground 45 "Restart Tunnel"
+  stop_tunnel
+  sleep 2
+  apply_tunnel
+}
+
+tunnel_status() {
+  clear
+  gum style --foreground 45 --bold "Tunnel Status"
+  echo "Boghche service : $(systemctl is-active boghche 2>/dev/null || true)"
+  echo "IPsec service   : $(systemctl is-active strongswan-starter 2>/dev/null || true)"
+  echo
+  ipsec statusall 2>/dev/null | grep -E 'Security Associations|ESTABLISHED|INSTALLED|bytes_i|bytes_o|rekeying' || true
+  echo
+  ip -br addr show "$(jq -r '.vti_if // "vti0"' "$CONFIG" 2>/dev/null || echo vti0)" 2>/dev/null || true
+  echo
+  ip rule show || true
+  echo
+  ip route show table vti 2>/dev/null || true
+}
 
 add_route() {
   [ -f "$CONFIG" ] || { gum style --foreground 196 "No config found."; return; }
@@ -101,47 +168,52 @@ add_route() {
   tmp=$(mktemp)
   jq --arg route "$route" '.route_subnets = ((.route_subnets // []) + [$route] | unique)' "$CONFIG" > "$tmp"
   mv "$tmp" "$CONFIG"
-  systemctl restart boghche || true
   gum style --foreground 46 "Route added: $route"
+  apply_tunnel
 }
 
 tunnel_menu() {
   while true; do
     clear; gum style --foreground 45 --bold "Tunnel Service"
-    choice=$(gum choose "Start" "Stop" "Restart" "Configure" "Generate IPsec" "Add route" "Status" "Back")
+    choice=$(gum choose \
+      "Configure / Apply Tunnel" \
+      "Start / Apply Current Config" \
+      "Restart Tunnel" \
+      "Stop Tunnel" \
+      "Add Routed Subnet" \
+      "Tunnel Status" \
+      "Back")
     case "$choice" in
-      Start) start_tunnel; pause;; Stop) stop_tunnel; pause;; Restart) restart_tunnel; pause;; Configure) configure_tunnel; pause;;
-      "Generate IPsec") generate_ipsec || true; pause;; "Add route") add_route; pause;;
-      Status) clear; ipsec statusall || true; echo; ip rule || true; echo; ip route show table vti || true; pause;; Back) return;;
+      "Configure / Apply Tunnel") configure_tunnel; pause ;;
+      "Start / Apply Current Config") start_tunnel; pause ;;
+      "Restart Tunnel") restart_tunnel; pause ;;
+      "Stop Tunnel") stop_tunnel; pause ;;
+      "Add Routed Subnet") add_route; pause ;;
+      "Tunnel Status") tunnel_status; pause ;;
+      "Back") return ;;
     esac
   done
 }
 
-monitor_menu() {
-  while true; do
-    clear; gum style --foreground 45 --bold "Monitoring"
-    choice=$(gum choose "Top talkers" "XFRM" "Interfaces" "Routes" "Back")
-    case "$choice" in
-      "Top talkers") clear; /usr/local/lib/boghche/metrics.sh collect || true; /usr/local/lib/boghche/metrics.sh top || true; pause;;
-      XFRM) clear; cat /proc/net/xfrm_stat || true; echo; ip -s xfrm state || true; pause;;
-      Interfaces) clear; ip -br addr || true; echo; ip -s link || true; pause;;
-      Routes) clear; ip rule || true; echo; ip route show table vti || true; echo; ip route || true; pause;; Back) return;;
-    esac
-  done
+logs_menu() {
+  clear
+  gum style --foreground 45 --bold "Boghche Logs"
+  journalctl -u boghche -u strongswan-starter -n 160 --no-pager || true
+  pause
 }
 
-firewall_menu() { clear; gum style --foreground 220 --bold "Firewall"; ufw status verbose || true; echo; nft list ruleset 2>/dev/null || true; pause; }
-unbound_menu() { clear; gum style --foreground 220 --bold "Unbound / DoT"; /usr/local/lib/boghche/unbound.sh || true; echo; systemctl status unbound --no-pager || true; pause; }
-logs_menu() { clear; journalctl -u boghche -n 120 --no-pager || true; pause; }
-tools_menu() { clear; jq . "$CONFIG" 2>/dev/null || echo "No config"; echo; ls -l /usr/local/lib/boghche /usr/local/bin/boghche 2>/dev/null || true; pause; }
+fallback_monitor_menu() { clear; ipsec statusall || true; echo; grep '^Xfrm' /proc/net/xfrm_stat || true; pause; }
+fallback_firewall_menu() { clear; iptables -vnL || true; pause; }
+fallback_dns_menu() { clear; systemctl status unbound --no-pager || true; pause; }
+fallback_maintenance_menu() { clear; jq . "$CONFIG" 2>/dev/null || echo "No config"; pause; }
 
 main_loop() {
   need_root
   while true; do
-    if declare -F render_dashboard >/dev/null 2>&1; then render_dashboard; else clear; echo "[1] Tunnel [2] Monitor [3] Firewall [4] Unbound [5] Logs [6] Tools [Q] Quit"; fi
+    if declare -F render_dashboard >/dev/null 2>&1; then render_dashboard; else clear; echo "[1] Tunnel [2] Monitor [3] Firewall [4] DNS [5] Logs [6] Maintenance [Q] Quit"; fi
     ACTION=$(gum input --placeholder "Select service: 1-6 or q")
     case "${ACTION,,}" in
-      1|t|tunnel) tunnel_menu;; 2|m|monitor) monitor_menu;; 3|f|firewall) firewall_menu;; 4|u|unbound|dns) unbound_menu;; 5|l|logs) logs_menu;; 6|tools) tools_menu;; q|quit|exit) exit 0;; *) gum style --foreground 196 "Unknown option: $ACTION"; sleep 1;;
+      1|t|tunnel) tunnel_menu;; 2|m|monitor) declare -F monitor_menu >/dev/null && monitor_menu || fallback_monitor_menu;; 3|f|firewall) declare -F firewall_menu >/dev/null && firewall_menu || fallback_firewall_menu;; 4|u|unbound|dns) declare -F dns_menu >/dev/null && dns_menu || fallback_dns_menu;; 5|l|logs) logs_menu;; 6|maintenance|tools) declare -F maintenance_menu >/dev/null && maintenance_menu || fallback_maintenance_menu;; q|quit|exit) exit 0;; *) gum style --foreground 196 "Unknown option: $ACTION"; sleep 1;;
     esac
   done
 }

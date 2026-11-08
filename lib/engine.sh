@@ -35,27 +35,24 @@ MTU=$(jq -r '.mtu // "1400"' "$CONFIG")
 TCP_MSS=$(jq -r '.tcp_mss // empty' "$CONFIG")
 NAT=$(jq -r '.nat // false' "$CONFIG")
 
-if [ "$MODE" != "route" ]; then
-  log "Boghche engine skipped route VTI setup mode=$MODE"
-  exit 0
-fi
-
-if [ -z "$LEFT" ] || [ -z "$RIGHT" ] || [ -z "$VTI_ADDR" ]; then
+if [ "$MODE" = "route" ] && { [ -z "$LEFT" ] || [ -z "$RIGHT" ] || [ -z "$VTI_ADDR" ]; }; then
   echo "Route mode requires left, right and vti_addr"
   exit 1
 fi
 
-if ! [[ "$MTU" =~ ^[0-9]+$ ]] || [ "$MTU" -lt 576 ] || [ "$MTU" -gt 9000 ]; then
-  echo "Invalid VTI MTU: $MTU"
-  exit 1
-fi
+if [ "$MODE" = "route" ]; then
+  if ! [[ "$MTU" =~ ^[0-9]+$ ]] || [ "$MTU" -lt 576 ] || [ "$MTU" -gt 9000 ]; then
+    echo "Invalid VTI MTU: $MTU"
+    exit 1
+  fi
 
-if [ -z "$TCP_MSS" ]; then
-  TCP_MSS=$((MTU - 40))
-fi
-if ! [[ "$TCP_MSS" =~ ^[0-9]+$ ]] || [ "$TCP_MSS" -lt 536 ] || [ "$TCP_MSS" -ge "$MTU" ]; then
-  echo "Invalid TCP MSS: $TCP_MSS for MTU $MTU"
-  exit 1
+  if [ -z "$TCP_MSS" ]; then
+    TCP_MSS=$((MTU - 40))
+  fi
+  if ! [[ "$TCP_MSS" =~ ^[0-9]+$ ]] || [ "$TCP_MSS" -lt 536 ] || [ "$TCP_MSS" -ge "$MTU" ]; then
+    echo "Invalid TCP MSS: $TCP_MSS for MTU $MTU"
+    exit 1
+  fi
 fi
 
 mapfile -t CONFIG_LANS < <(
@@ -75,6 +72,49 @@ cleanup_strongswan_routes() {
      ip rule show | grep -Eq '^220:[[:space:]]+from all lookup 220([[:space:]]|$)'; then
     ip rule del pref 220 2>/dev/null || true
     ip route flush table 220 2>/dev/null || true
+  fi
+}
+
+cleanup_stale_forecast_rules() {
+  command -v iptables-legacy >/dev/null 2>&1 || return 0
+
+  # forecast should never be loaded in Boghche VTI mode. If it is absent,
+  # remove only stale ESP MARK rules that exactly match this peer/local pair
+  # and Boghche's VTI mark. Never flush user mangle chains globally.
+  if ! ipsec statusall 2>/dev/null | grep 'loaded plugins' | grep -qw forecast; then
+    local mark_hex rule
+    printf -v mark_hex '0x%x' "$VTI_MARK"
+
+    while IFS= read -r rule; do
+      [ -n "$rule" ] || continue
+      iptables-legacy -t mangle $rule 2>/dev/null || true
+    done < <(
+      iptables-legacy -t mangle -S PREROUTING 2>/dev/null |
+        awk -v right="$RIGHT" -v left="$LEFT" -v mark="$mark_hex" '
+          $0 ~ "^-A PREROUTING " &&
+          $0 ~ "-p esp" &&
+          $0 ~ "-s " right &&
+          $0 ~ "-d " left &&
+          $0 ~ "-j MARK" &&
+          index($0, mark) {
+            sub(/^-A /, "-D ")
+            print
+          }'
+    )
+  fi
+}
+
+verify_vti_plugins() {
+  local loaded
+  loaded=$(ipsec statusall 2>/dev/null | grep 'loaded plugins' || true)
+
+  if grep -qw forecast <<<"$loaded"; then
+    echo "ERROR: strongSwan forecast plugin is loaded in VTI mode."
+    return 1
+  fi
+  if grep -qw connmark <<<"$loaded"; then
+    echo "ERROR: strongSwan connmark plugin is loaded in VTI mode."
+    return 1
   fi
 }
 
@@ -120,6 +160,16 @@ else
 fi
 sleep 3
 
+if [ "$MODE" != "route" ]; then
+  if [ -x "$UNBOUND_GENERATOR" ]; then
+    "$UNBOUND_GENERATOR" || true
+  fi
+  log "Boghche policy-mode IPsec configuration applied"
+  exit 0
+fi
+
+verify_vti_plugins
+cleanup_stale_forecast_rules
 cleanup_strongswan_routes
 
 ip link del "$VTI_IF" 2>/dev/null || true
