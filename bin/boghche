@@ -168,8 +168,8 @@ add_route() {
   tmp=$(mktemp)
   jq --arg route "$route" '.route_subnets = ((.route_subnets // []) + [$route] | unique)' "$CONFIG" > "$tmp"
   mv "$tmp" "$CONFIG"
-  systemctl restart boghche || true
   gum style --foreground 46 "Route added: $route"
+  apply_tunnel
 }
 
 tunnel_menu() {
@@ -210,7 +210,7 @@ fallback_maintenance_menu() { clear; jq . "$CONFIG" 2>/dev/null || echo "No conf
 main_loop() {
   need_root
   while true; do
-    if declare -F render_dashboard >/dev/null 2>&1; then render_dashboard; else clear; echo "[1] Tunnel [2] Monitor [3] Firewall [4] Unbound [5] Logs [6] Tools [Q] Quit"; fi
+    if declare -F render_dashboard >/dev/null 2>&1; then render_dashboard; else clear; echo "[1] Tunnel [2] Monitor [3] Firewall [4] DNS [5] Logs [6] Maintenance [Q] Quit"; fi
     ACTION=$(gum input --placeholder "Select service: 1-6 or q")
     case "${ACTION,,}" in
       1|t|tunnel) tunnel_menu;; 2|m|monitor) declare -F monitor_menu >/dev/null && monitor_menu || fallback_monitor_menu;; 3|f|firewall) declare -F firewall_menu >/dev/null && firewall_menu || fallback_firewall_menu;; 4|u|unbound|dns) declare -F dns_menu >/dev/null && dns_menu || fallback_dns_menu;; 5|l|logs) logs_menu;; 6|maintenance|tools) declare -F maintenance_menu >/dev/null && maintenance_menu || fallback_maintenance_menu;; q|quit|exit) exit 0;; *) gum style --foreground 196 "Unknown option: $ACTION"; sleep 1;;
