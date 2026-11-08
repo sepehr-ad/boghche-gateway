@@ -35,27 +35,24 @@ MTU=$(jq -r '.mtu // "1400"' "$CONFIG")
 TCP_MSS=$(jq -r '.tcp_mss // empty' "$CONFIG")
 NAT=$(jq -r '.nat // false' "$CONFIG")
 
-if [ "$MODE" != "route" ]; then
-  log "Boghche engine skipped route VTI setup mode=$MODE"
-  exit 0
-fi
-
-if [ -z "$LEFT" ] || [ -z "$RIGHT" ] || [ -z "$VTI_ADDR" ]; then
+if [ "$MODE" = "route" ] && { [ -z "$LEFT" ] || [ -z "$RIGHT" ] || [ -z "$VTI_ADDR" ]; }; then
   echo "Route mode requires left, right and vti_addr"
   exit 1
 fi
 
-if ! [[ "$MTU" =~ ^[0-9]+$ ]] || [ "$MTU" -lt 576 ] || [ "$MTU" -gt 9000 ]; then
-  echo "Invalid VTI MTU: $MTU"
-  exit 1
-fi
+if [ "$MODE" = "route" ]; then
+  if ! [[ "$MTU" =~ ^[0-9]+$ ]] || [ "$MTU" -lt 576 ] || [ "$MTU" -gt 9000 ]; then
+    echo "Invalid VTI MTU: $MTU"
+    exit 1
+  fi
 
-if [ -z "$TCP_MSS" ]; then
-  TCP_MSS=$((MTU - 40))
-fi
-if ! [[ "$TCP_MSS" =~ ^[0-9]+$ ]] || [ "$TCP_MSS" -lt 536 ] || [ "$TCP_MSS" -ge "$MTU" ]; then
-  echo "Invalid TCP MSS: $TCP_MSS for MTU $MTU"
-  exit 1
+  if [ -z "$TCP_MSS" ]; then
+    TCP_MSS=$((MTU - 40))
+  fi
+  if ! [[ "$TCP_MSS" =~ ^[0-9]+$ ]] || [ "$TCP_MSS" -lt 536 ] || [ "$TCP_MSS" -ge "$MTU" ]; then
+    echo "Invalid TCP MSS: $TCP_MSS for MTU $MTU"
+    exit 1
+  fi
 fi
 
 mapfile -t CONFIG_LANS < <(
@@ -162,6 +159,14 @@ else
   ipsec restart
 fi
 sleep 3
+
+if [ "$MODE" != "route" ]; then
+  if [ -x "$UNBOUND_GENERATOR" ]; then
+    "$UNBOUND_GENERATOR" || true
+  fi
+  log "Boghche policy-mode IPsec configuration applied"
+  exit 0
+fi
 
 verify_vti_plugins
 cleanup_stale_forecast_rules
