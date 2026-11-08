@@ -99,12 +99,35 @@ panel() {
 join_cols() { paste "$@" | sed 's/\t/  /g'; }
 
 ram_pct() { free | awk '/Mem:/ {printf "%d", $3*100/$2}' 2>/dev/null || echo 0; }
-cpu_pct() { awk 'BEGIN{print 8}'; }
+cpu_pct() {
+  local a b idle1 total1 idle2 total2
+  read -r _ a1 a2 a3 a4 a5 a6 a7 a8 _ < /proc/stat
+  idle1=$((a4 + a5))
+  total1=$((a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8))
+  sleep 0.1
+  read -r _ b1 b2 b3 b4 b5 b6 b7 b8 _ < /proc/stat
+  idle2=$((b4 + b5))
+  total2=$((b1 + b2 + b3 + b4 + b5 + b6 + b7 + b8))
+  if [ $((total2-total1)) -le 0 ]; then echo 0; else
+    echo $((100 - (100 * (idle2-idle1) / (total2-total1))))
+  fi
+}
+
+system_health_state() {
+  local forward tunnel
+  forward=$(sysctl -n net.ipv4.ip_forward 2>/dev/null || echo 0)
+  tunnel=$(plain_tunnel_state)
+  if [ "$forward" = "1" ] && [ "$tunnel" = "CONNECTED" ]; then
+    echo HEALTHY
+  else
+    echo DEGRADED
+  fi
+}
 
 render_header() {
   local width="$1"
   local inner=$((width-4))
-  local host kernel uptime now tunnel ram cpu xfrm dns_state line1 line2
+  local host kernel uptime now tunnel ram cpu xfrm dns_state health line1 line2
   host=$(hostname)
   kernel=$(uname -r)
   uptime=$(uptime -p 2>/dev/null | sed 's/up //')
@@ -112,13 +135,13 @@ render_header() {
   tunnel=$(plain_tunnel_state)
   ram=$(ram_pct)
   cpu=$(cpu_pct)
+  health=$(system_health_state)
   xfrm=$(grep XfrmInTmplMismatch /proc/net/xfrm_stat 2>/dev/null | awk '{print $2}')
   xfrm=${xfrm:-0}
-  [ "$xfrm" = "0" ] && xfrm="OK" || xfrm="WARN"
   dns_state=$(systemctl is-active unbound 2>/dev/null || echo DOWN)
   [ "$dns_state" = active ] && dns_state=RUNNING || dns_state=DOWN
-  line1="${CYAN}${BOLD}BOGHCHE GATEWAY${RESET}  ${GRAY}Tunnel:${RESET} $(badge "$tunnel")  ${GRAY}CPU:${RESET} ${cpu}%  ${GRAY}RAM:${RESET} ${ram}%  $(badge HEALTHY)"
-  line2="${GRAY}Host:${RESET} $host  ${GRAY}Kernel:${RESET} $kernel  ${GRAY}Uptime:${RESET} $uptime  ${GRAY}XFRM:${RESET} $(badge "$xfrm")  ${GRAY}DNS:${RESET} $(badge "$dns_state")  ${GRAY}Time:${RESET} $now"
+  line1="${CYAN}${BOLD}BOGHCHE GATEWAY${RESET}  ${GRAY}Tunnel:${RESET} $(badge "$tunnel")  ${GRAY}CPU:${RESET} ${cpu}%  ${GRAY}RAM:${RESET} ${ram}%  $(badge "$health")"
+  line2="${GRAY}Host:${RESET} $host  ${GRAY}Kernel:${RESET} $kernel  ${GRAY}Uptime:${RESET} $uptime  ${GRAY}XFRM tmpl total:${RESET} $xfrm  ${GRAY}DNS:${RESET} $(badge "$dns_state")  ${GRAY}Time:${RESET} $now"
   printf '%s+%s+%s\n' "$CYAN" "$(repeat $((width-2)) '=')" "$RESET"
   printf '%s|%s %s %s|%s\n' "$CYAN" "$RESET" "$(pad_line "$line1" "$inner")" "$CYAN" "$RESET"
   printf '%s|%s %s %s|%s\n' "$CYAN" "$RESET" "$(pad_line "$line2" "$inner")" "$CYAN" "$RESET"
@@ -126,35 +149,37 @@ render_header() {
 }
 
 widget_tunnel() {
-  local state peer vti_ip remote sas
+  local state peer vti_ip remote sas dpd
   state=$(plain_tunnel_state)
   peer=$(cfg '.right' 'N/A')
   vti_ip=$(cfg '.vti_addr' 'N/A')
   remote=$(cfg '.vti_remote' 'N/A')
+  dpd="$(cfg '.dpd_delay' '10s')/$(cfg '.dpd_timeout' '30s')"
   sas=$(ipsec statusall 2>/dev/null | grep -c 'INSTALLED' || true)
   cat <<EOF
 Peer       $peer
 Local VTI  $vti_ip
 Remote GW  $remote
-DPD        $(badge OK)
+DPD cfg    $dpd
 SA         ${sas}/1
 Status     $(badge "$state")
 EOF
 }
 
 widget_xfrm() {
-  local mismatch states policies tmpl
+  local mismatch seqerr states policies
   mismatch=$(grep XfrmInTmplMismatch /proc/net/xfrm_stat 2>/dev/null | awk '{print $2}')
+  seqerr=$(grep XfrmInStateSeqError /proc/net/xfrm_stat 2>/dev/null | awk '{print $2}')
   mismatch=${mismatch:-0}
+  seqerr=${seqerr:-0}
   states=$(ip xfrm state 2>/dev/null | grep -c '^src ' || true)
   policies=$(ip xfrm policy 2>/dev/null | grep -c '^src ' || true)
-  [ "$mismatch" -eq 0 ] 2>/dev/null && tmpl=OK || tmpl=WARN
   cat <<EOF
 Policies   $policies
 States     $states
-Mismatch   $mismatch
-Replay     32
-Template   $(badge "$tmpl")
+Tmpl total $mismatch
+Seq total  $seqerr
+Counters   cumulative
 Status     $(badge "$([ "$states" -gt 0 ] && echo OK || echo DOWN)")
 EOF
 }
@@ -187,17 +212,18 @@ widget_top_talkers() {
 }
 
 widget_health() {
-  local load ram cpu
+  local load ram cpu health
   load=$(cut -d' ' -f1-3 /proc/loadavg 2>/dev/null || echo N/A)
   ram=$(ram_pct)
   cpu=$(cpu_pct)
+  health=$(system_health_state)
   cat <<EOF
 Load       $load
 CPU        $(bar "$cpu" 14)
 RAM        $(bar "$ram" 14)
 Disk cap   2GB rolling
 Stats      /var/lib/boghche/stats
-Status     $(badge HEALTHY)
+Status     $(badge "$health")
 EOF
 }
 
