@@ -185,16 +185,17 @@ EOF
 }
 
 widget_dns() {
-  local state listen upstream
+  local state listen upstream dot
   state=$(systemctl is-active unbound 2>/dev/null || true)
   [ "$state" = active ] && state=RUNNING || state=DISABLED
   listen=$(cfg '.unbound_listen_ip' "$(cfg '.vti_addr' 'N/A' | cut -d/ -f1)")
   upstream=$(jq -r '.dns_upstreams // [] | .[0] // "N/A"' "$CONFIG" 2>/dev/null || echo N/A)
+  if [[ "$upstream" == *"@853"* ]]; then dot="configured"; else dot="not configured"; fi
   cat <<EOF
 Listen     ${listen:-N/A}
 Port       53 -> 853
 Upstream   ${upstream:-N/A}
-TLS        $(badge OK)
+DoT cfg    $dot
 Config     boghche.conf
 Status     $(badge "$state")
 EOF
