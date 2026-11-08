@@ -2,6 +2,7 @@
 set -euo pipefail
 
 source /usr/local/lib/boghche/utils.sh
+source /usr/local/lib/boghche/firewall_policy.sh
 
 CONFIG="/etc/boghche/config.json"
 IPSEC_GENERATOR="/usr/local/lib/boghche/ipsec.sh"
@@ -62,6 +63,27 @@ mapfile -t CONFIG_LANS < <(
 LANS=( "${DEFAULT_LANS[@]}" "${CONFIG_LANS[@]}" )
 mapfile -t LANS < <(printf '%s\n' "${LANS[@]}" | awk 'NF' | sort -u)
 
+if jq -e 'has("nat_sources")' "$CONFIG" >/dev/null; then
+  jq -e '.nat_sources | type == "array" and all(.[]; type == "string")' "$CONFIG" >/dev/null || {
+    echo "nat_sources must be a JSON array of strings"
+    exit 1
+  }
+fi
+jq -e '(.vti_remote // "") | type == "string"' "$CONFIG" >/dev/null || {
+  echo "vti_remote must be a string"
+  exit 1
+}
+mapfile -t NAT_SOURCES < <(boghche_effective_nat_sources "$CONFIG")
+
+for NET in "${NAT_SOURCES[@]}"; do
+  if [ "$NET" = "any" ] || ! boghche_valid_ipv4_cidr "$NET"; then
+    echo "Invalid NAT source: $NET"
+    exit 1
+  fi
+done
+
+boghche_firewall_validate_config "$CONFIG"
+
 VTI_IP="${VTI_ADDR%%/*}"
 
 cleanup_strongswan_routes() {
@@ -72,35 +94,6 @@ cleanup_strongswan_routes() {
      ip rule show | grep -Eq '^220:[[:space:]]+from all lookup 220([[:space:]]|$)'; then
     ip rule del pref 220 2>/dev/null || true
     ip route flush table 220 2>/dev/null || true
-  fi
-}
-
-cleanup_stale_forecast_rules() {
-  command -v iptables-legacy >/dev/null 2>&1 || return 0
-
-  # forecast should never be loaded in Boghche VTI mode. If it is absent,
-  # remove only stale ESP MARK rules that exactly match this peer/local pair
-  # and Boghche's VTI mark. Never flush user mangle chains globally.
-  if ! ipsec statusall 2>/dev/null | grep 'loaded plugins' | grep -qw forecast; then
-    local mark_hex rule
-    printf -v mark_hex '0x%x' "$VTI_MARK"
-
-    while IFS= read -r rule; do
-      [ -n "$rule" ] || continue
-      iptables-legacy -t mangle $rule 2>/dev/null || true
-    done < <(
-      iptables-legacy -t mangle -S PREROUTING 2>/dev/null |
-        awk -v right="$RIGHT" -v left="$LEFT" -v mark="$mark_hex" '
-          $0 ~ "^-A PREROUTING " &&
-          $0 ~ "-p esp" &&
-          $0 ~ "-s " right &&
-          $0 ~ "-d " left &&
-          $0 ~ "-j MARK" &&
-          index($0, mark) {
-            sub(/^-A /, "-D ")
-            print
-          }'
-    )
   fi
 }
 
@@ -131,22 +124,43 @@ configure_mss() {
 }
 
 configure_forwarding() {
+  local kind index source destination protocol port action comment target label
+  local -a rule
+
   iptables -N "$FORWARD_CHAIN" 2>/dev/null || true
   iptables -F "$FORWARD_CHAIN"
   iptables -C FORWARD -j "$FORWARD_CHAIN" 2>/dev/null || \
     iptables -I FORWARD 1 -j "$FORWARD_CHAIN"
 
-  iptables -A "$FORWARD_CHAIN" -i "$VTI_IF" -o "$WAN_IF" -j ACCEPT
   iptables -A "$FORWARD_CHAIN" -i "$WAN_IF" -o "$VTI_IF" \
     -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
 
-  # Remove exact legacy rules for the current interface pair from older releases.
-  while iptables -C FORWARD -i "$VTI_IF" -o "$WAN_IF" -j ACCEPT 2>/dev/null; do
-    iptables -D FORWARD -i "$VTI_IF" -o "$WAN_IF" -j ACCEPT 2>/dev/null || break
-  done
-  while iptables -C FORWARD -i "$WAN_IF" -o "$VTI_IF" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null; do
-    iptables -D FORWARD -i "$WAN_IF" -o "$VTI_IF" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || break
-  done
+  while IFS=$'\t' read -r kind index source destination protocol port action comment; do
+    rule=(iptables -A "$FORWARD_CHAIN" -i "$VTI_IF" -o "$WAN_IF")
+    [ "$source" = "any" ] || rule+=(-s "$source")
+    [ "$destination" = "any" ] || rule+=(-d "$destination")
+    [ "$protocol" = "any" ] || rule+=(-p "$protocol")
+    if [ "$port" != "any" ]; then
+      rule+=(--dport "$port")
+    fi
+
+    case "$action" in
+      allow) target="ACCEPT" ;;
+      block) target="DROP" ;;
+      *) echo "Unsupported firewall action: $action"; return 1 ;;
+    esac
+
+    case "$kind" in
+      policy) label="Boghche policy ${index}: ${comment:-no comment}" ;;
+      source-default) label="Boghche source default: block" ;;
+      unmanaged-default) label="Boghche unmanaged default: allow" ;;
+      *) echo "Unsupported firewall plan row: $kind"; return 1 ;;
+    esac
+    label="${label:0:240}"
+    rule+=(-m comment --comment "$label" -j "$target")
+    "${rule[@]}"
+  done < <(boghche_firewall_plan "$CONFIG")
+
 }
 
 echo "[vti-up] starting..."
@@ -169,7 +183,6 @@ if [ "$MODE" != "route" ]; then
 fi
 
 verify_vti_plugins
-cleanup_stale_forecast_rules
 cleanup_strongswan_routes
 
 ip link del "$VTI_IF" 2>/dev/null || true
@@ -217,7 +230,7 @@ if [ "$NAT" = "true" ]; then
   iptables -t nat -C POSTROUTING -j "$NAT_CHAIN" 2>/dev/null || \
     iptables -t nat -A POSTROUTING -j "$NAT_CHAIN" 2>/dev/null || true
 
-  for NET in "${LANS[@]}"; do
+  for NET in "${NAT_SOURCES[@]}"; do
     iptables -t nat -A "$NAT_CHAIN" -s "$NET" -o "$WAN_IF" -j MASQUERADE 2>/dev/null || true
   done
 else
@@ -232,5 +245,5 @@ if [ -x "$UNBOUND_GENERATOR" ]; then
 fi
 
 echo "[vti-up] done."
-log "Boghche VTI engine applied left=$LEFT right=$RIGHT if=$VTI_IF mtu=$MTU mss=$TCP_MSS table=${TABLE_ID}/${TABLE_NAME}"
+log "Boghche VTI engine applied left=$LEFT right=$RIGHT if=$VTI_IF mtu=$MTU mss=$TCP_MSS table=${TABLE_ID}/${TABLE_NAME} nat_sources=${#NAT_SOURCES[@]}"
 exit 0

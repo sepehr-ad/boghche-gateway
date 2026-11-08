@@ -34,7 +34,7 @@ install_packages() {
   apt install -y \
     strongswan strongswan-starter strongswan-libcharon strongswan-pki \
     libcharon-extra-plugins iproute2 iptables nftables conntrack jq curl git \
-    tcpdump unbound ufw ca-certificates tar gzip dnsutils
+    tcpdump unbound ca-certificates tar gzip dnsutils
 }
 
 configure_kernel() {
@@ -78,7 +78,6 @@ install_gum() {
 install_files() {
   mkdir -p \
     /usr/local/lib/boghche/services \
-    /etc/boghche/rules \
     /etc/boghche \
     /etc/unbound/unbound.conf.d \
     /var/log/boghche \
@@ -87,6 +86,7 @@ install_files() {
     /var/lib/boghche/stats/state
 
   curl -fsSL "$REPO/lib/engine.sh" -o /usr/local/lib/boghche/engine.sh
+  curl -fsSL "$REPO/lib/firewall_policy.sh" -o /usr/local/lib/boghche/firewall_policy.sh
   curl -fsSL "$REPO/lib/utils.sh" -o /usr/local/lib/boghche/utils.sh
   curl -fsSL "$REPO/lib/ipsec.sh" -o /usr/local/lib/boghche/ipsec.sh
   curl -fsSL "$REPO/lib/unbound.sh" -o /usr/local/lib/boghche/unbound.sh
@@ -97,8 +97,6 @@ install_files() {
   curl -fsSL "$REPO/lib/services/dns_service.sh" -o /usr/local/lib/boghche/services/dns_service.sh
   curl -fsSL "$REPO/lib/services/monitor_service.sh" -o /usr/local/lib/boghche/services/monitor_service.sh
   curl -fsSL "$REPO/lib/services/maintenance_service.sh" -o /usr/local/lib/boghche/services/maintenance_service.sh
-  curl -fsSL "$REPO/lib/services/safety.sh" -o /usr/local/lib/boghche/services/safety.sh
-
   curl -fsSL "$REPO/bin/boghche" -o /usr/local/bin/boghche
   curl -fsSL "$REPO/systemd/boghche.service" -o /etc/systemd/system/boghche.service || true
 
@@ -127,7 +125,7 @@ validate_install() {
   [ -f /usr/local/lib/boghche/services/dns_service.sh ]
   [ -f /usr/local/lib/boghche/services/monitor_service.sh ]
   [ -f /usr/local/lib/boghche/services/maintenance_service.sh ]
-  [ -f /usr/local/lib/boghche/services/safety.sh ]
+  [ -f /usr/local/lib/boghche/firewall_policy.sh ]
 
   echo "[✓] Modular appliance services installed"
 }
