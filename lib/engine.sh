@@ -78,6 +78,49 @@ cleanup_strongswan_routes() {
   fi
 }
 
+cleanup_stale_forecast_rules() {
+  command -v iptables-legacy >/dev/null 2>&1 || return 0
+
+  # forecast should never be loaded in Boghche VTI mode. If it is absent,
+  # remove only stale ESP MARK rules that exactly match this peer/local pair
+  # and Boghche's VTI mark. Never flush user mangle chains globally.
+  if ! ipsec statusall 2>/dev/null | grep 'loaded plugins' | grep -qw forecast; then
+    local mark_hex rule
+    printf -v mark_hex '0x%x' "$VTI_MARK"
+
+    while IFS= read -r rule; do
+      [ -n "$rule" ] || continue
+      iptables-legacy -t mangle $rule 2>/dev/null || true
+    done < <(
+      iptables-legacy -t mangle -S PREROUTING 2>/dev/null |
+        awk -v right="$RIGHT" -v left="$LEFT" -v mark="$mark_hex" '
+          $0 ~ "^-A PREROUTING " &&
+          $0 ~ "-p esp" &&
+          $0 ~ "-s " right &&
+          $0 ~ "-d " left &&
+          $0 ~ "-j MARK" &&
+          index($0, mark) {
+            sub(/^-A /, "-D ")
+            print
+          }'
+    )
+  fi
+}
+
+verify_vti_plugins() {
+  local loaded
+  loaded=$(ipsec statusall 2>/dev/null | grep 'loaded plugins' || true)
+
+  if grep -qw forecast <<<"$loaded"; then
+    echo "ERROR: strongSwan forecast plugin is loaded in VTI mode."
+    return 1
+  fi
+  if grep -qw connmark <<<"$loaded"; then
+    echo "ERROR: strongSwan connmark plugin is loaded in VTI mode."
+    return 1
+  fi
+}
+
 configure_mss() {
   iptables -t mangle -N "$MSS_CHAIN" 2>/dev/null || true
   iptables -t mangle -F "$MSS_CHAIN"
@@ -120,6 +163,8 @@ else
 fi
 sleep 3
 
+verify_vti_plugins
+cleanup_stale_forecast_rules
 cleanup_strongswan_routes
 
 ip link del "$VTI_IF" 2>/dev/null || true
